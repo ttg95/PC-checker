@@ -1,0 +1,9 @@
+export { scanRegistry } from './registryScanner';
+export { scanEventLogs } from './eventLogScanner';
+export { scanAppHistory } from './userAssistScanner';
+export { scanProcesses } from './processScanner';
+export { scanServicesAndDrivers } from './driverScanner';
+export { scanScheduledTasks } from './taskScanner';
+export { scanDmaDevices } from './dmaScanner';
+export { scanFileSystem } from './fileSystemScanner';
+export { scanSystemInfo } from './systemInfoScanner';
