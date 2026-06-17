@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "electron:dev": "set NODE_ENV=development&& concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "npm run build && tsc -p electron/tsconfig.json",
-    "electron:start": "electron ."
+    "electron:start": "electron .",
+    "release": "npm run build && tsc -p electron/tsconfig.json && electron-builder --win --publish always"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -54,6 +55,13 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ttg95",
+        "repo": "PC-checker"
+      }
     ],
     "win": {
       "target": "portable",
