@@ -1,16 +1,21 @@
 import { useState } from 'react';
 import { useScan } from '../../utils/ScanContext';
+import { useAccounts } from '../../utils/AccountContext';
 import type { ReportConfig } from '../../types';
 import { getMachineName, formatTimestamp } from '../../utils/id';
-import { FileDown, FileJson, FileSpreadsheet, Shield, Download } from 'lucide-react';
+import { uploadScanReport } from '../../utils/reportStorage';
+import { FileDown, FileJson, FileSpreadsheet, Shield, Download, UploadCloud } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Papa from 'papaparse';
 
 export default function ExportReports() {
   const { results, getStats } = useScan();
+  const { activeAccount, isSupabaseBacked } = useAccounts();
   const stats = getStats();
   const hasResults = Object.values(results).some(arr => arr.length > 0);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const [config, setConfig] = useState<ReportConfig>({
     machineName: getMachineName(),
@@ -81,9 +86,9 @@ export default function ExportReports() {
     URL.revokeObjectURL(url);
   };
 
-  const exportJSON = () => {
+  const buildReport = () => {
     const findings = getAllFindings();
-    const report = {
+    return {
       reportHeader: {
         tool: 'PC Checker',
         version: '1.0.0',
@@ -94,8 +99,35 @@ export default function ExportReports() {
       },
       findings,
     };
+  };
+
+  const exportJSON = () => {
+    const report = buildReport();
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     downloadBlob(blob, `integrity-audit-${Date.now()}.json`);
+  };
+
+  const uploadJSON = async () => {
+    setUploadStatus(null);
+    setUploadError(null);
+    if (!activeAccount) {
+      setUploadError('Sign in before uploading a scan report.');
+      return;
+    }
+
+    try {
+      const report = buildReport();
+      const filePath = await uploadScanReport({
+        accountId: activeAccount.id,
+        machineName: config.machineName,
+        scanTimestamp: config.scanTimestamp,
+        summary: stats,
+        payload: report,
+      });
+      setUploadStatus(`Uploaded to scan-reports/${filePath}`);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Could not upload report.');
+    }
   };
 
   const exportCSV = () => {
@@ -168,6 +200,12 @@ export default function ExportReports() {
         </div>
       )}
 
+      {(uploadStatus || uploadError) && (
+        <div className={`border rounded-lg px-4 py-3 text-sm ${uploadError ? 'bg-red-500/10 border-red-500/30 text-red-300' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'}`}>
+          {uploadError || uploadStatus}
+        </div>
+      )}
+
       <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-4">
         <h2 className="text-sm font-semibold text-slate-300">Report Configuration</h2>
         <div className="grid grid-cols-2 gap-4">
@@ -194,7 +232,7 @@ export default function ExportReports() {
         </label>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <button onClick={exportPDF} disabled={!hasResults} className="flex flex-col items-center gap-3 p-6 bg-slate-900/60 border border-slate-700/50 rounded-xl hover:border-red-500/30 hover:bg-red-500/5 transition-all group disabled:opacity-40 disabled:cursor-not-allowed">
           <FileDown className="w-8 h-8 text-red-400 group-hover:scale-110 transition-transform" />
           <span className="text-sm font-medium text-slate-200">PDF Report</span>
@@ -212,6 +250,12 @@ export default function ExportReports() {
           <span className="text-sm font-medium text-slate-200">CSV Report</span>
           <span className="text-xs text-slate-500">Spreadsheet-compatible</span>
           <Download className="w-4 h-4 text-slate-600 group-hover:text-emerald-400 transition-colors" />
+        </button>
+        <button onClick={() => void uploadJSON()} disabled={!hasResults || !activeAccount || !isSupabaseBacked} className="flex flex-col items-center gap-3 p-6 bg-slate-900/60 border border-slate-700/50 rounded-xl hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-all group disabled:opacity-40 disabled:cursor-not-allowed">
+          <UploadCloud className="w-8 h-8 text-cyan-400 group-hover:scale-110 transition-transform" />
+          <span className="text-sm font-medium text-slate-200">Upload Report</span>
+          <span className="text-xs text-slate-500">Supabase storage</span>
+          <UploadCloud className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors" />
         </button>
       </div>
 

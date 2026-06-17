@@ -17,6 +17,7 @@ export default function Accounts() {
     addExclusion,
     removeExclusion,
     creditLabel,
+    isSupabaseBacked,
   } = useAccounts();
   const [createEmail, setCreateEmail] = useState('');
   const [createPassword, setCreatePassword] = useState('');
@@ -28,9 +29,11 @@ export default function Accounts() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const isFirstAccount = accounts.length === 0;
   const isMaster = activeAccount?.role === 'master';
-  const canCreateAccounts = isFirstAccount || isMaster;
+  const isFirstLocalAccount = !isSupabaseBacked && accounts.length === 0;
+  const isCreatingMaster = !activeAccount && (isSupabaseBacked || isFirstLocalAccount);
+  const canCreateAccounts = isCreatingMaster || isMaster;
+  const showSignIn = isSupabaseBacked || accounts.length > 0;
 
   const handleCreate = async () => {
     setMessage(null);
@@ -63,11 +66,11 @@ export default function Accounts() {
     }
   };
 
-  const handleAddExclusion = () => {
+  const handleAddExclusion = async () => {
     setMessage(null);
     setError(null);
     try {
-      addExclusion(exclusionTerm);
+      await addExclusion(exclusionTerm);
       setExclusionTerm('');
       setMessage('Exclusion added.');
     } catch (err) {
@@ -75,11 +78,11 @@ export default function Accounts() {
     }
   };
 
-  const handleRemoveExclusion = (id: string) => {
+  const handleRemoveExclusion = async (id: string) => {
     setMessage(null);
     setError(null);
     try {
-      removeExclusion(id);
+      await removeExclusion(id);
       setMessage('Exclusion removed.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not remove exclusion.');
@@ -93,7 +96,7 @@ export default function Accounts() {
           <CreditCard className="w-6 h-6 text-cyan-400" />
           <div>
             <h1 className="text-2xl font-bold text-white">Accounts</h1>
-            <p className="text-sm text-slate-400">Local account creation, master access, and scan credits</p>
+            <p className="text-sm text-slate-400">{isSupabaseBacked ? 'Supabase-backed accounts, master access, and scan credits' : 'Account creation, master access, and scan credits'}</p>
           </div>
         </div>
         {activeAccount && (
@@ -128,11 +131,11 @@ export default function Accounts() {
           <section className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-4">
             <div className="flex items-center gap-2">
               <UserPlus className="w-5 h-5 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-slate-200">{isFirstAccount ? 'Create Master Account' : 'Create Account'}</h2>
+              <h2 className="text-sm font-semibold text-slate-200">{isCreatingMaster ? 'Create Master Account' : 'Create Account'}</h2>
             </div>
             <AccountInput label="Email" type="email" value={createEmail} onChange={setCreateEmail} />
             <AccountInput label="Password" type="password" value={createPassword} onChange={setCreatePassword} />
-            {!isFirstAccount && (
+            {isMaster && (
               <div>
                 <label className="text-xs text-slate-500 uppercase tracking-wider block mb-1">Starting Credits</label>
                 <input
@@ -146,9 +149,9 @@ export default function Accounts() {
             )}
             <button onClick={() => void handleCreate()} className="flex items-center justify-center gap-2 w-full px-4 py-2 rounded-lg bg-cyan-500 text-white text-sm font-medium hover:bg-cyan-400">
               <Plus className="w-4 h-4" />
-              {isFirstAccount ? 'Create Master Account' : 'Create Account'}
+              {isCreatingMaster ? 'Create Master Account' : 'Create Account'}
             </button>
-            {isFirstAccount && <p className="text-xs text-slate-500">The first account created becomes the master account and receives unlimited credits.</p>}
+            {isCreatingMaster && <p className="text-xs text-slate-500">If no master account exists yet, the first account created receives unlimited credits.</p>}
           </section>
         ) : (
           <section className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-3">
@@ -160,18 +163,19 @@ export default function Accounts() {
           </section>
         )}
 
-        {!isFirstAccount && (
+        {showSignIn && (
           <section className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-4">
             <div className="flex items-center gap-2">
               <LogIn className="w-5 h-5 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-slate-200">Sign In</h2>
+              <h2 className="text-sm font-semibold text-slate-200">{isSupabaseBacked ? 'Log In to Supabase' : 'Sign In'}</h2>
             </div>
             <AccountInput label="Email" type="email" value={loginEmail} onChange={setLoginEmail} />
             <AccountInput label="Password" type="password" value={loginPassword} onChange={setLoginPassword} />
             <button onClick={() => void handleLogin()} className="flex items-center justify-center gap-2 w-full px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm font-medium text-slate-100 hover:border-cyan-500/50">
               <LogIn className="w-4 h-4" />
-              Sign In
+              {isSupabaseBacked ? 'Log In and Link Backend' : 'Sign In'}
             </button>
+            {isSupabaseBacked && <p className="text-xs text-slate-500">Logging in links this app session to the Supabase backend and loads the account from Supabase.</p>}
           </section>
         )}
       </div>
@@ -197,8 +201,8 @@ export default function Accounts() {
                   </div>
                   {account.credits !== null && (
                     <div className="flex flex-wrap items-center gap-2">
-                      <button onClick={() => addCredits(account.id, 1)} className="px-3 py-2 rounded-lg bg-slate-700 text-sm text-slate-100 hover:bg-slate-600">+1</button>
-                      <button onClick={() => addCredits(account.id, 5)} className="px-3 py-2 rounded-lg bg-slate-700 text-sm text-slate-100 hover:bg-slate-600">+5</button>
+                      <button onClick={() => void addCredits(account.id, 1)} className="px-3 py-2 rounded-lg bg-slate-700 text-sm text-slate-100 hover:bg-slate-600">+1</button>
+                      <button onClick={() => void addCredits(account.id, 5)} className="px-3 py-2 rounded-lg bg-slate-700 text-sm text-slate-100 hover:bg-slate-600">+5</button>
                       <input
                         type="number"
                         min={0}
@@ -206,7 +210,7 @@ export default function Accounts() {
                         onChange={e => setCreditEdits(prev => ({ ...prev, [account.id]: Number(e.target.value) }))}
                         className="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
                       />
-                      <button onClick={() => setCredits(account.id, creditEdits[account.id] ?? account.credits)} className="px-3 py-2 rounded-lg bg-cyan-500 text-sm text-white hover:bg-cyan-400">Set</button>
+                      <button onClick={() => void setCredits(account.id, creditEdits[account.id] ?? account.credits)} className="px-3 py-2 rounded-lg bg-cyan-500 text-sm text-white hover:bg-cyan-400">Set</button>
                     </div>
                   )}
                 </div>
@@ -272,7 +276,7 @@ export default function Accounts() {
                   placeholder="Path, process name, device id, registry key, or trigger text"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
                 />
-                <button onClick={handleAddExclusion} className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-cyan-500 text-sm font-medium text-white hover:bg-cyan-400">
+                <button onClick={() => void handleAddExclusion()} className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-cyan-500 text-sm font-medium text-white hover:bg-cyan-400">
                   <Plus className="w-4 h-4" />
                   Add Exclusion
                 </button>
@@ -284,7 +288,7 @@ export default function Accounts() {
                       <p className="text-sm text-slate-100 break-all">{exclusion.term}</p>
                       <p className="text-xs text-slate-500">Added {formatTimestamp(exclusion.createdAt)}</p>
                     </div>
-                    <button onClick={() => handleRemoveExclusion(exclusion.id)} className="p-2 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10" aria-label="Remove exclusion">
+                    <button onClick={() => void handleRemoveExclusion(exclusion.id)} className="p-2 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10" aria-label="Remove exclusion">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>

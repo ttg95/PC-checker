@@ -12,6 +12,10 @@ export default function Dashboard() {
   const stats = getStats();
   const scanComplete = stats.scansComplete === stats.totalScans;
   const hasResults = Object.values(results).some(arr => arr.length > 0);
+  const scanPercent = progress.length > 0
+    ? Math.round(progress.reduce((sum, item) => sum + item.progress, 0) / progress.length)
+    : 0;
+  const scanError = progress.find(item => item.status === 'error')?.error;
 
   const unsignedRegCount = results.registry.filter(r => r.isSigned === false).length;
   const cheatProviderHits = [
@@ -80,19 +84,18 @@ export default function Dashboard() {
       )}
 
       {progress.length > 0 && (
-        <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-slate-300 mb-4">Scan Progress</h2>
-          <div className="space-y-3">
-            {progress.map(p => (
-              <div key={p.scannerName} className="flex items-center gap-4">
-                <span className="text-sm text-slate-300 w-44 shrink-0">{p.scannerName}</span>
-                <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full transition-all duration-500 ${p.status === 'complete' ? 'bg-emerald-500' : 'bg-cyan-500 animate-pulse'}`} style={{ width: `${p.progress}%` }} />
-                </div>
-                <span className={`text-xs w-28 text-right ${p.status === 'error' ? 'text-red-400' : 'text-slate-400'}`}>{p.status === 'complete' ? `${p.itemsFound} items` : p.status === 'error' ? (p.error || 'Error') : 'Scanning...'}</span>
-              </div>
-            ))}
+        <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-6">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <h2 className="text-sm font-semibold text-slate-300">Scan Progress</h2>
+            <span className={`text-4xl font-bold ${scanError ? 'text-red-400' : scanPercent >= 100 ? 'text-emerald-400' : 'text-cyan-400'}`}>{scanPercent}%</span>
           </div>
+          <div className="h-4 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${scanError ? 'bg-red-500' : scanPercent >= 100 ? 'bg-emerald-500' : 'bg-cyan-500'}`}
+              style={{ width: `${scanPercent}%` }}
+            />
+          </div>
+          {scanError && <p className="text-sm text-red-300 mt-3">{scanError}</p>}
         </div>
       )}
 

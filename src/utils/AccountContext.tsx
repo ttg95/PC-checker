@@ -1,4 +1,5 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { isSupabaseConfigured, supabase, supabaseProjectUrl, type ExclusionRow, type ProfileRow } from './supabase';
 
 export interface Account {
   id: string;
@@ -28,14 +29,18 @@ interface AccountContextValue {
   accounts: Account[];
   activeAccount: Account | null;
   exclusions: Exclusion[];
+  isAccountLoading: boolean;
+  isSupabaseBacked: boolean;
+  supabaseProjectUrl: string;
+  refreshAccountLink: () => Promise<void>;
   createAccount: (input: CreateAccountInput) => Promise<Account>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
-  addCredits: (accountId: string, amount: number) => void;
-  setCredits: (accountId: string, amount: number) => void;
-  addExclusion: (term: string) => void;
-  removeExclusion: (id: string) => void;
-  consumeScanCredit: () => { ok: boolean; message?: string };
+  addCredits: (accountId: string, amount: number) => Promise<void>;
+  setCredits: (accountId: string, amount: number) => Promise<void>;
+  addExclusion: (term: string) => Promise<void>;
+  removeExclusion: (id: string) => Promise<void>;
+  consumeScanCredit: () => Promise<{ ok: boolean; message?: string }>;
   canRunScan: boolean;
   creditLabel: string;
 }
@@ -92,26 +97,51 @@ function loadActiveId(): string | null {
   return localStorage.getItem(ACTIVE_KEY);
 }
 
-export function AccountProvider({ children }: { children: ReactNode }) {
-  const [accounts, setAccountsState] = useState<Account[]>(loadAccounts);
-  const [activeAccountId, setActiveAccountId] = useState<string | null>(loadActiveId);
-  const [exclusions, setExclusionsState] = useState<Exclusion[]>(loadExclusions);
+function fromProfile(row: ProfileRow): Account {
+  return {
+    id: row.id,
+    email: row.email,
+    passwordHash: '',
+    salt: '',
+    role: row.role,
+    credits: row.credits,
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at,
+  };
+}
 
-  const setAccounts = (next: Account[]) => {
+function fromExclusion(row: ExclusionRow): Exclusion {
+  return {
+    id: row.id,
+    term: row.term,
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+  };
+}
+
+export function AccountProvider({ children }: { children: ReactNode }) {
+  const [accounts, setAccountsState] = useState<Account[]>(() => isSupabaseConfigured ? [] : loadAccounts());
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(() => isSupabaseConfigured ? null : loadActiveId());
+  const [exclusions, setExclusionsState] = useState<Exclusion[]>(() => isSupabaseConfigured ? [] : loadExclusions());
+  const [isAccountLoading, setIsAccountLoading] = useState(isSupabaseConfigured);
+
+  const persistLocalAccounts = (next: Account[]) => {
     setAccountsState(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   };
 
   const setActiveId = (id: string | null) => {
     setActiveAccountId(id);
-    if (id) {
-      localStorage.setItem(ACTIVE_KEY, id);
-    } else {
-      localStorage.removeItem(ACTIVE_KEY);
+    if (!isSupabaseConfigured) {
+      if (id) {
+        localStorage.setItem(ACTIVE_KEY, id);
+      } else {
+        localStorage.removeItem(ACTIVE_KEY);
+      }
     }
   };
 
-  const setExclusions = (next: Exclusion[]) => {
+  const persistLocalExclusions = (next: Exclusion[]) => {
     setExclusionsState(next);
     localStorage.setItem(EXCLUSIONS_KEY, JSON.stringify(next));
   };
@@ -121,7 +151,71 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     [accounts, activeAccountId],
   );
 
-  const createAccount = async ({ email, password, initialCredits = 0 }: CreateAccountInput) => {
+  const refreshSupabaseState = useCallback(async () => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    setIsAccountLoading(true);
+    try {
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData.user) {
+        setAccountsState([]);
+        setActiveId(null);
+        setExclusionsState([]);
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userData.user.id)
+        .single();
+
+      if (profileError || !profile) {
+        setAccountsState([]);
+        setActiveId(null);
+        setExclusionsState([]);
+        return;
+      }
+
+      const activeProfile = fromProfile(profile as ProfileRow);
+      if (activeProfile.role === 'master') {
+        const { data: profileRows, error: profilesError } = await supabase
+          .from('profiles')
+          .select('*')
+          .order('created_at', { ascending: true });
+        if (profilesError) throw profilesError;
+        setAccountsState((profileRows as ProfileRow[]).map(fromProfile));
+      } else {
+        setAccountsState([activeProfile]);
+      }
+
+      const { data: exclusionRows, error: exclusionsError } = await supabase
+        .from('account_exclusions')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (exclusionsError) throw exclusionsError;
+
+      setExclusionsState((exclusionRows as ExclusionRow[]).map(fromExclusion));
+      setActiveId(activeProfile.id);
+    } finally {
+      setIsAccountLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    void refreshSupabaseState();
+    const { data } = supabase.auth.onAuthStateChange(() => {
+      void refreshSupabaseState();
+    });
+
+    return () => {
+      data.subscription.unsubscribe();
+    };
+  }, [refreshSupabaseState]);
+
+  const createLocalAccount = async ({ email, password, initialCredits = 0 }: CreateAccountInput) => {
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail || !normalizedEmail.includes('@')) {
       throw new Error('Enter a valid email address.');
@@ -149,13 +243,85 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       lastLoginAt: new Date().toISOString(),
     };
 
-    setAccounts([...accounts, account]);
+    persistLocalAccounts([...accounts, account]);
     setActiveId(account.id);
     return account;
   };
 
+  const createAccount = async (input: CreateAccountInput) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return createLocalAccount(input);
+    }
+
+    const normalizedEmail = input.email.trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      throw new Error('Enter a valid email address.');
+    }
+    if (input.password.length < 8) {
+      throw new Error('Password must be at least 8 characters.');
+    }
+
+    if (activeAccount?.role === 'master') {
+      const { data, error } = await supabase.functions.invoke('create-account', {
+        body: {
+          email: normalizedEmail,
+          password: input.password,
+          initialCredits: Math.max(0, Math.floor(input.initialCredits ?? 0)),
+        },
+      });
+      if (error) throw error;
+      await refreshSupabaseState();
+      return fromProfile(data.account as ProfileRow);
+    }
+
+    if (activeAccount) {
+      throw new Error('Only the master account can create additional accounts.');
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email: normalizedEmail,
+      password: input.password,
+    });
+    if (error) throw error;
+    if (!data.user) {
+      throw new Error('Account signup did not return a user.');
+    }
+
+    await refreshSupabaseState();
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', data.user.id)
+      .maybeSingle();
+    const fallbackAccount: Account = {
+      id: data.user.id,
+      email: normalizedEmail,
+      passwordHash: '',
+      salt: '',
+      role: 'master',
+      credits: null,
+      createdAt: new Date().toISOString(),
+      lastLoginAt: null,
+    };
+    return profile ? fromProfile(profile as ProfileRow) : fallbackAccount;
+  };
+
   const login = async (email: string, password: string) => {
     const normalizedEmail = email.trim().toLowerCase();
+
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
+      if (error) throw error;
+      if (data.user) {
+        await supabase
+          .from('profiles')
+          .update({ last_login_at: new Date().toISOString() })
+          .eq('id', data.user.id);
+      }
+      await refreshSupabaseState();
+      return;
+    }
+
     const account = accounts.find(item => item.email === normalizedEmail);
     if (!account) {
       throw new Error('Account not found.');
@@ -167,25 +333,56 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
 
     const next = accounts.map(item => item.id === account.id ? { ...item, lastLoginAt: new Date().toISOString() } : item);
-    setAccounts(next);
+    persistLocalAccounts(next);
     setActiveId(account.id);
   };
 
-  const logout = () => setActiveId(null);
+  const logout = () => {
+    if (isSupabaseConfigured && supabase) {
+      void supabase.auth.signOut().then(() => {
+        setAccountsState([]);
+        setActiveId(null);
+        setExclusionsState([]);
+      });
+      return;
+    }
+    setActiveId(null);
+  };
 
-  const addCredits = (accountId: string, amount: number) => {
+  const addCredits = async (accountId: string, amount: number) => {
     const safeAmount = Math.max(0, Math.floor(amount));
     if (safeAmount === 0) return;
-    setAccounts(accounts.map(account => {
+
+    if (isSupabaseConfigured && supabase) {
+      const target = accounts.find(account => account.id === accountId);
+      if (!target || target.credits === null) return;
+      await setCredits(accountId, target.credits + safeAmount);
+      return;
+    }
+
+    persistLocalAccounts(accounts.map(account => {
       if (account.id !== accountId || account.credits === null) return account;
       return { ...account, credits: account.credits + safeAmount };
     }));
   };
 
-  const setCredits = (accountId: string, amount: number) => {
-    setAccounts(accounts.map(account => {
+  const setCredits = async (accountId: string, amount: number) => {
+    const nextCredits = Math.max(0, Math.floor(amount));
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ credits: nextCredits })
+        .eq('id', accountId)
+        .not('credits', 'is', null);
+      if (error) throw error;
+      await refreshSupabaseState();
+      return;
+    }
+
+    persistLocalAccounts(accounts.map(account => {
       if (account.id !== accountId || account.credits === null) return account;
-      return { ...account, credits: Math.max(0, Math.floor(amount)) };
+      return { ...account, credits: nextCredits };
     }));
   };
 
@@ -195,7 +392,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const addExclusion = (term: string) => {
+  const addExclusion = async (term: string) => {
     requireMaster();
     const normalized = term.trim();
     if (normalized.length < 2) {
@@ -204,7 +401,17 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     if (exclusions.some(item => item.term.toLowerCase() === normalized.toLowerCase())) {
       throw new Error('That exclusion already exists.');
     }
-    setExclusions([
+
+    if (isSupabaseConfigured && supabase && activeAccount) {
+      const { error } = await supabase
+        .from('account_exclusions')
+        .insert({ term: normalized, created_by: activeAccount.id });
+      if (error) throw error;
+      await refreshSupabaseState();
+      return;
+    }
+
+    persistLocalExclusions([
       ...exclusions,
       {
         id: generateId(),
@@ -215,12 +422,20 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     ]);
   };
 
-  const removeExclusion = (id: string) => {
+  const removeExclusion = async (id: string) => {
     requireMaster();
-    setExclusions(exclusions.filter(item => item.id !== id));
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase.from('account_exclusions').delete().eq('id', id);
+      if (error) throw error;
+      await refreshSupabaseState();
+      return;
+    }
+
+    persistLocalExclusions(exclusions.filter(item => item.id !== id));
   };
 
-  const consumeScanCredit = () => {
+  const consumeScanCredit = async () => {
     if (!activeAccount) {
       return { ok: false, message: 'Create or sign in to an account before scanning.' };
     }
@@ -231,9 +446,24 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       return { ok: false, message: 'This account has no scan credits remaining.' };
     }
 
-    setAccounts(accounts.map(account => (
+    const nextCredits = activeAccount.credits - 1;
+
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.rpc('consume_scan_credit');
+      if (error) {
+        return { ok: false, message: error.message };
+      }
+      const response = data as { ok?: boolean; message?: string };
+      if (!response.ok) {
+        return { ok: false, message: response.message || 'This account has no scan credits remaining.' };
+      }
+      await refreshSupabaseState();
+      return { ok: true };
+    }
+
+    persistLocalAccounts(accounts.map(account => (
       account.id === activeAccount.id && account.credits !== null
-        ? { ...account, credits: account.credits - 1 }
+        ? { ...account, credits: nextCredits }
         : account
     )));
     return { ok: true };
@@ -248,6 +478,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       accounts,
       activeAccount,
       exclusions,
+      isAccountLoading,
+      isSupabaseBacked: isSupabaseConfigured,
+      supabaseProjectUrl,
+      refreshAccountLink: refreshSupabaseState,
       createAccount,
       login,
       logout,
@@ -256,8 +490,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       addExclusion,
       removeExclusion,
       consumeScanCredit,
-      canRunScan: !!activeAccount && (activeAccount.credits === null || activeAccount.credits > 0),
-      creditLabel,
+      canRunScan: !isAccountLoading && !!activeAccount && (activeAccount.credits === null || activeAccount.credits > 0),
+      creditLabel: isAccountLoading ? 'Loading account...' : creditLabel,
     }}>
       {children}
     </AccountContext.Provider>

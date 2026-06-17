@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { ScanResult, ScanProgress, FlagStatus, DashboardStats, RegistryEntry, EventLogEntry, AppHistoryEntry, ServiceEntry, ProcessEntry, ScheduledTaskEntry, DmaDeviceEntry, FileSystemEntry, SystemInfoEntry } from '../types';
 import { scanRegistry, scanEventLogs, scanAppHistory, scanProcesses, scanServicesAndDrivers, scanScheduledTasks, scanDmaDevices, scanFileSystem, scanSystemInfo } from '../scanners';
 import { useAccounts, type Exclusion } from './AccountContext';
@@ -7,9 +7,20 @@ interface ScanContextValue {
   results: ScanResult;
   progress: ScanProgress[];
   isScanning: boolean;
+  activeReview: ReviewScanSession | null;
   startScan: () => void;
+  loadReviewScan: (session: ReviewScanSession, results: ScanResult) => void;
+  clearReviewScan: () => void;
   updateFlagStatus: (category: string, id: string, status: FlagStatus) => void;
   getStats: () => DashboardStats;
+}
+
+export interface ReviewScanSession {
+  id: string;
+  displayName: string;
+  machineName: string;
+  submittedBy?: string | null;
+  scanTimestamp?: string | null;
 }
 
 const emptyResults: ScanResult = {
@@ -36,11 +47,7 @@ function itemMatchesExclusion(item: ScanItem, exclusions: Exclusion[]): boolean 
 
 function applyExclusionsToItems<T extends ScanItem>(items: T[], exclusions: Exclusion[]): T[] {
   if (exclusions.length === 0) return items;
-  return items.map(item => (
-    itemMatchesExclusion(item, exclusions)
-      ? { ...item, riskScore: 0, riskLevel: 'none' }
-      : item
-  ));
+  return items.filter(item => !itemMatchesExclusion(item, exclusions));
 }
 
 function applyExclusionsToResults(results: ScanResult, exclusions: Exclusion[]): ScanResult {
@@ -58,11 +65,49 @@ function applyExclusionsToResults(results: ScanResult, exclusions: Exclusion[]):
   };
 }
 
+function getProgressItemCount(results: ScanResult, scannerName: string, currentCount: number): number {
+  switch (scannerName) {
+    case 'Registry Analysis':
+      return results.registry.length;
+    case 'Event Viewer':
+      return results.events.length;
+    case 'Application History':
+      return results.appHistory.length;
+    case 'Services & Drivers':
+      return results.services.length;
+    case 'Running Processes':
+      return results.processes.length;
+    case 'Scheduled Tasks':
+      return results.scheduledTasks.length;
+    case 'DMA / PCIe Devices':
+      return results.dmaDevices.length;
+    case 'File System':
+      return results.fileSystem.length;
+    case 'System Info':
+      return results.systemInfo.length;
+    default:
+      return currentCount;
+  }
+}
+
 export function ScanProvider({ children }: { children: ReactNode }) {
   const { consumeScanCredit, exclusions } = useAccounts();
   const [results, setResults] = useState<ScanResult>(emptyResults);
   const [progress, setProgress] = useState<ScanProgress[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [activeReview, setActiveReview] = useState<ReviewScanSession | null>(null);
+
+  useEffect(() => {
+    if (exclusions.length === 0) return;
+    setResults(prev => applyExclusionsToResults(prev, exclusions));
+  }, [exclusions]);
+
+  useEffect(() => {
+    setProgress(current => current.map(item => ({
+      ...item,
+      itemsFound: getProgressItemCount(results, item.scannerName, item.itemsFound),
+    })));
+  }, [results]);
 
   const updateProgress = useCallback((name: string, update: Partial<ScanProgress>) => {
     setProgress(prev => {
@@ -103,19 +148,32 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       ['System Info', 'systemInfo'],
     ];
 
+    let simulatedProgress = 0;
     for (const [name] of scanSteps) {
-      updateProgress(name, { status: 'scanning', progress: 15 });
+      updateProgress(name, { status: 'scanning', progress: 0 });
     }
 
-    const liveResults = await window.electron!.runPcScan();
-    const filteredResults = applyExclusionsToResults(liveResults, exclusions);
-    setResults(filteredResults);
+    const progressTimer = window.setInterval(() => {
+      simulatedProgress = Math.min(92, simulatedProgress + 3);
+      for (const [name] of scanSteps) {
+        updateProgress(name, { status: 'scanning', progress: simulatedProgress });
+      }
+    }, 350);
+
+    let filteredResults: ScanResult | null = null;
+    try {
+      const liveResults = await window.electron!.runPcScan();
+      filteredResults = applyExclusionsToResults(liveResults, exclusions);
+      setResults(filteredResults);
+    } finally {
+      window.clearInterval(progressTimer);
+    }
 
     for (const [name, key] of scanSteps) {
       updateProgress(name, {
         status: 'complete',
         progress: 100,
-        itemsFound: liveResults[key].length,
+        itemsFound: filteredResults?.[key].length ?? 0,
       });
     }
   }, [exclusions, updateProgress]);
@@ -123,10 +181,11 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const startScan = useCallback(async () => {
     if (isScanning) return;
     setIsScanning(true);
+    setActiveReview(null);
     setProgress([]);
     setResults(emptyResults);
 
-    const creditCheck = consumeScanCredit();
+    const creditCheck = await consumeScanCredit();
     if (!creditCheck.ok) {
       updateProgress('Account Credits', {
         status: 'error',
@@ -168,6 +227,37 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     setIsScanning(false);
   }, [consumeScanCredit, isScanning, runLivePcScan, runScanner, updateProgress]);
 
+  const loadReviewScan = useCallback((session: ReviewScanSession, reviewResults: ScanResult) => {
+    const filteredResults = applyExclusionsToResults(reviewResults, exclusions);
+    const scanSteps: [string, keyof ScanResult][] = [
+      ['Registry Analysis', 'registry'],
+      ['Event Viewer', 'events'],
+      ['Application History', 'appHistory'],
+      ['Services & Drivers', 'services'],
+      ['Running Processes', 'processes'],
+      ['Scheduled Tasks', 'scheduledTasks'],
+      ['DMA / PCIe Devices', 'dmaDevices'],
+      ['File System', 'fileSystem'],
+      ['System Info', 'systemInfo'],
+    ];
+
+    setActiveReview(session);
+    setIsScanning(false);
+    setResults(filteredResults);
+    setProgress(scanSteps.map(([scannerName, key]) => ({
+      scannerName,
+      progress: 100,
+      status: 'complete',
+      itemsFound: filteredResults[key].length,
+    })));
+  }, [exclusions]);
+
+  const clearReviewScan = useCallback(() => {
+    setActiveReview(null);
+    setProgress([]);
+    setResults(emptyResults);
+  }, []);
+
   const updateFlagStatus = useCallback((category: string, id: string, status: FlagStatus) => {
     setResults(prev => {
       const key = category as keyof ScanResult;
@@ -204,7 +294,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   }, [results, progress]);
 
   return (
-    <ScanContext.Provider value={{ results, progress, isScanning, startScan, updateFlagStatus, getStats }}>
+    <ScanContext.Provider value={{ results, progress, isScanning, activeReview, startScan, loadReviewScan, clearReviewScan, updateFlagStatus, getStats }}>
       {children}
     </ScanContext.Provider>
   );
