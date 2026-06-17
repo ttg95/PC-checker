@@ -42,6 +42,7 @@ interface AccountContextValue {
   setCredits: (accountId: string, amount: number) => Promise<void>;
   addExclusion: (term: string) => Promise<void>;
   removeExclusion: (id: string) => Promise<void>;
+  createCheckoutSession: (tokenCount: number) => Promise<string>;
   consumeScanCredit: () => Promise<{ ok: boolean; message?: string }>;
   canRunScan: boolean;
   creditLabel: string;
@@ -529,6 +530,34 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     persistLocalExclusions(exclusions.filter(item => item.id !== id));
   };
 
+  const createCheckoutSession = async (tokenCount: number) => {
+    const safeTokenCount = Math.max(1, Math.floor(tokenCount));
+    if (!activeAccount) {
+      throw new Error('Sign in before buying scan tokens.');
+    }
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error('Online payments are only available for connected accounts.');
+    }
+    if (activeAccount.credits === null) {
+      throw new Error('Master accounts already have unlimited scan credits.');
+    }
+
+    const { data, error } = await supabase.functions.invoke('create-checkout-session', {
+      body: { tokenCount: safeTokenCount },
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const checkoutUrl = (data as { url?: string } | null)?.url;
+    if (!checkoutUrl) {
+      throw new Error('Payment checkout did not return a URL.');
+    }
+
+    return checkoutUrl;
+  };
+
   const consumeScanCredit = async () => {
     if (!activeAccount) {
       return { ok: false, message: 'Create or sign in to an account before scanning.' };
@@ -584,6 +613,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       setCredits,
       addExclusion,
       removeExclusion,
+      createCheckoutSession,
       consumeScanCredit,
       canRunScan: !isAccountLoading && !!activeAccount && (activeAccount.credits === null || activeAccount.credits > 0),
       creditLabel: isAccountLoading ? 'Loading account...' : creditLabel,

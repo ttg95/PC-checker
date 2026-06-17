@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CreditCard, Crown, LogIn, LogOut, Plus, UserPlus } from 'lucide-react';
+import { CreditCard, Crown, ExternalLink, LogIn, LogOut, Plus, UserPlus } from 'lucide-react';
 import { useAccounts, type Account } from '../../utils/AccountContext';
 
 export default function Accounts() {
@@ -10,6 +10,8 @@ export default function Accounts() {
     login,
     requestPasswordReset,
     logout,
+    createCheckoutSession,
+    refreshAccountLink,
     creditLabel,
     isSupabaseBacked,
   } = useAccounts();
@@ -19,6 +21,8 @@ export default function Accounts() {
   const [loginPassword, setLoginPassword] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tokenCount, setTokenCount] = useState(1);
+  const [isStartingCheckout, setIsStartingCheckout] = useState(false);
 
   const isFirstLocalAccount = !isSupabaseBacked && accounts.length === 0;
   const canCreateAccount = !activeAccount && (isSupabaseBacked || isFirstLocalAccount);
@@ -64,6 +68,21 @@ export default function Accounts() {
     }
   };
 
+  const handleBuyTokens = async () => {
+    setMessage(null);
+    setError(null);
+    setIsStartingCheckout(true);
+    try {
+      const checkoutUrl = await createCheckoutSession(tokenCount);
+      window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
+      setMessage('Stripe checkout opened. After payment completes, return here and refresh credits.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start Stripe checkout.');
+    } finally {
+      setIsStartingCheckout(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       <div className="flex items-center justify-between gap-4">
@@ -100,6 +119,62 @@ export default function Accounts() {
           </div>
         </div>
       </section>
+
+      {activeAccount && activeAccount.credits !== null && (
+        <section className="bg-slate-900/60 border border-cyan-500/20 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-lg bg-emerald-500/10">
+                <CreditCard className="w-6 h-6 text-emerald-300" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-200">Buy Scan Tokens</h2>
+                <p className="text-sm text-slate-400">A$30 AUD per scan token. Payments are handled through Stripe.</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshAccountLink()}
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 hover:border-cyan-500/50"
+            >
+              Refresh credits
+            </button>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-[160px_1fr]">
+            <div>
+              <label className="text-xs text-slate-500 uppercase tracking-wider block mb-1">Tokens</label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={tokenCount}
+                onChange={event => setTokenCount(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+              />
+            </div>
+            <div className="flex flex-col justify-end gap-2 sm:flex-row sm:items-end">
+              <div className="flex-1 rounded-lg border border-slate-700/50 bg-slate-950/50 px-4 py-3">
+                <p className="text-xs uppercase tracking-wider text-slate-500">Total</p>
+                <p className="text-lg font-semibold text-white">A${tokenCount * 30} AUD</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleBuyTokens()}
+                disabled={!isSupabaseBacked || isStartingCheckout}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                <ExternalLink className="w-4 h-4" />
+                {isStartingCheckout ? 'Opening Stripe...' : 'Buy with Stripe'}
+              </button>
+            </div>
+          </div>
+
+          {!isSupabaseBacked && (
+            <p className="text-xs text-amber-300">Stripe payments require a connected Supabase account.</p>
+          )}
+        </section>
+      )}
 
       <div className="grid lg:grid-cols-2 gap-6">
         {canCreateAccount && (

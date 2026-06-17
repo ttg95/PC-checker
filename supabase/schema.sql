@@ -44,6 +44,16 @@ create table if not exists public.scan_reports (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.payment_events (
+  stripe_event_id text primary key,
+  stripe_session_id text not null unique,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  token_count integer not null check (token_count > 0),
+  amount_total integer not null check (amount_total >= 0),
+  currency text not null,
+  created_at timestamptz not null default now()
+);
+
 alter table public.scan_reports
   add column if not exists display_name text not null default 'Untitled scan',
   add column if not exists review_status text not null default 'pending',
@@ -228,6 +238,89 @@ begin
 end;
 $$;
 
+create or replace function public.add_scan_credits(target_profile_id uuid, token_count integer)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  safe_token_count integer := greatest(coalesce(token_count, 0), 0);
+  updated_profile public.profiles;
+begin
+  if safe_token_count <= 0 then
+    raise exception 'Token count must be greater than zero.';
+  end if;
+
+  update public.profiles
+  set credits = coalesce(credits, 0) + safe_token_count
+  where id = target_profile_id
+    and credits is not null
+  returning * into updated_profile;
+
+  if not found then
+    raise exception 'Could not add credits to this account.';
+  end if;
+
+  return updated_profile;
+end;
+$$;
+
+create or replace function public.record_scan_token_payment(
+  stripe_event_id text,
+  stripe_session_id text,
+  target_profile_id uuid,
+  token_count integer,
+  amount_total integer,
+  currency text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  safe_token_count integer := greatest(coalesce(token_count, 0), 0);
+  updated_profile public.profiles;
+begin
+  if safe_token_count <= 0 then
+    raise exception 'Token count must be greater than zero.';
+  end if;
+
+  insert into public.payment_events (
+    stripe_event_id,
+    stripe_session_id,
+    profile_id,
+    token_count,
+    amount_total,
+    currency
+  )
+  values (
+    stripe_event_id,
+    stripe_session_id,
+    target_profile_id,
+    safe_token_count,
+    greatest(coalesce(amount_total, 0), 0),
+    lower(coalesce(currency, 'aud'))
+  );
+
+  update public.profiles
+  set credits = coalesce(credits, 0) + safe_token_count
+  where id = target_profile_id
+    and credits is not null
+  returning * into updated_profile;
+
+  if not found then
+    raise exception 'Could not add credits to this account.';
+  end if;
+
+  return jsonb_build_object('ok', true, 'credits', updated_profile.credits);
+exception
+  when unique_violation then
+    return jsonb_build_object('ok', true, 'duplicate', true);
+end;
+$$;
+
 create or replace function public.set_app_appearance(selected_theme text, glow_enabled boolean default false)
 returns jsonb
 language plpgsql
@@ -318,6 +411,8 @@ end;
 $$;
 
 grant execute on function public.consume_scan_credit() to authenticated;
+grant execute on function public.add_scan_credits(uuid, integer) to service_role;
+grant execute on function public.record_scan_token_payment(text, text, uuid, integer, integer, text) to service_role;
 grant execute on function public.sync_current_user_profile() to authenticated;
 grant execute on function public.set_app_theme(text) to authenticated;
 grant execute on function public.set_app_appearance(text, boolean) to authenticated;
@@ -333,6 +428,7 @@ alter table public.profiles enable row level security;
 alter table public.master_emails enable row level security;
 alter table public.account_exclusions enable row level security;
 alter table public.scan_reports enable row level security;
+alter table public.payment_events enable row level security;
 alter table public.app_settings enable row level security;
 
 drop policy if exists "profiles_select_self_or_master" on public.profiles;
