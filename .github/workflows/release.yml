@@ -11,6 +11,9 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      VITE_SUPABASE_URL: https://vjnwfkdqwdesfcsdiacp.supabase.co
+      VITE_SUPABASE_ANON_KEY: sb_publishable_ygGuhDiPU5XiHYS54yufcw_TZs4qodZ
 
     steps:
       - name: Check out repository

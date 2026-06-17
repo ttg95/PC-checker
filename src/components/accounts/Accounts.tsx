@@ -22,7 +22,7 @@ export default function Accounts() {
 
   const isFirstLocalAccount = !isSupabaseBacked && accounts.length === 0;
   const canCreateAccount = !activeAccount && (isSupabaseBacked || isFirstLocalAccount);
-  const showLogin = isSupabaseBacked || accounts.length > 0;
+  const showLogin = true;
 
   const handleCreate = async () => {
     setMessage(null);
@@ -70,8 +70,8 @@ export default function Accounts() {
         <div className="flex items-center gap-3">
           <CreditCard className="w-6 h-6 text-cyan-400" />
           <div>
-            <h1 className="text-2xl font-bold text-white">Accounts</h1>
-            <p className="text-sm text-slate-400">Create an account, log in, and manage access.</p>
+            <h1 className="text-2xl font-bold text-white">Sign In</h1>
+            <p className="text-sm text-slate-400">Log in, create an account, and manage access.</p>
           </div>
         </div>
         {activeAccount && (

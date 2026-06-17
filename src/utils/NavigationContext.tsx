@@ -45,7 +45,7 @@ export const defaultNavItems: NavItemConfig[] = [
   { id: 'tasks', to: '/tasks', label: 'Scheduled Tasks' },
   { id: 'processes', to: '/processes', label: 'Running Processes' },
   { id: 'reports', to: '/reports', label: 'Export Reports' },
-  { id: 'accounts', to: '/accounts', label: 'Accounts' },
+  { id: 'accounts', to: '/accounts', label: 'Sign In' },
   { id: 'master', to: '/master', label: 'Master Settings', masterOnly: true },
   { id: 'admin', to: '/admin', label: 'Admin Panel', masterOnly: true },
 ];

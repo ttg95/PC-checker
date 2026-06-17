@@ -12,7 +12,7 @@ import {
   Monitor,
   UserCog,
   Cable,
-  CreditCard,
+  LogIn,
   Crown,
 } from 'lucide-react';
 import { useAccounts } from '../../utils/AccountContext';
@@ -31,7 +31,7 @@ const navIcons: Record<NavItemId, typeof LayoutDashboard> = {
   tasks: ListChecks,
   processes: Activity,
   reports: FileDown,
-  accounts: CreditCard,
+  accounts: LogIn,
   master: Crown,
   admin: UserCog,
 };
