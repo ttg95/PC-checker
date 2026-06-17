@@ -117,14 +117,15 @@ export default function ExportReports() {
 
     try {
       const report = buildReport();
-      const filePath = await uploadScanReport({
+      const uploaded = await uploadScanReport({
         accountId: activeAccount.id,
+        displayName: `Report ${formatTimestamp(config.scanTimestamp)}`,
         machineName: config.machineName,
         scanTimestamp: config.scanTimestamp,
         summary: stats,
         payload: report,
       });
-      setUploadStatus(`Uploaded to scan-reports/${filePath}`);
+      setUploadStatus(`Uploaded to scan-reports/${uploaded.file_path}`);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Could not upload report.');
     }
@@ -156,7 +157,7 @@ export default function ExportReports() {
     doc.setFontSize(14);
     doc.text('Risk Summary', 14, 62);
     doc.setFontSize(10);
-    doc.text(`Total Findings: ${stats.totalFindings}`, 14, 70);
+    doc.text(`Total Potential Risks/Triggers: ${stats.highRisk + stats.mediumRisk + stats.lowRisk}`, 14, 70);
     doc.text(`High Risk: ${stats.highRisk}`, 14, 76);
     doc.text(`Medium Risk: ${stats.mediumRisk}`, 14, 82);
     doc.text(`Low Risk: ${stats.lowRisk}`, 14, 88);
@@ -254,7 +255,7 @@ export default function ExportReports() {
         <button onClick={() => void uploadJSON()} disabled={!hasResults || !activeAccount || !isSupabaseBacked} className="flex flex-col items-center gap-3 p-6 bg-slate-900/60 border border-slate-700/50 rounded-xl hover:border-cyan-500/30 hover:bg-cyan-500/5 transition-all group disabled:opacity-40 disabled:cursor-not-allowed">
           <UploadCloud className="w-8 h-8 text-cyan-400 group-hover:scale-110 transition-transform" />
           <span className="text-sm font-medium text-slate-200">Upload Report</span>
-          <span className="text-xs text-slate-500">Supabase storage</span>
+          <span className="text-xs text-slate-500">Cloud storage</span>
           <UploadCloud className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors" />
         </button>
       </div>
@@ -263,7 +264,7 @@ export default function ExportReports() {
         <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5">
           <h2 className="text-sm font-semibold text-slate-300 mb-3">Report Preview</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-            <div><p className="text-2xl font-bold text-white">{getAllFindings().length}</p><p className="text-xs text-slate-400">Items in Report</p></div>
+            <div><p className="text-2xl font-bold text-white">{getAllFindings().length}</p><p className="text-xs text-slate-400">Full Scan Total</p></div>
             <div><p className="text-2xl font-bold text-red-400">{getAllFindings().filter(f => f.risk === 'high').length}</p><p className="text-xs text-slate-400">High Risk</p></div>
             <div><p className="text-2xl font-bold text-amber-400">{getAllFindings().filter(f => f.risk === 'medium').length}</p><p className="text-xs text-slate-400">Medium Risk</p></div>
             <div><p className="text-2xl font-bold text-cyan-400">{getAllFindings().filter(f => f.flagged).length}</p><p className="text-xs text-slate-400">Flagged for Review</p></div>

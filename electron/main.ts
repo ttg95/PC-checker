@@ -1,10 +1,60 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, type MessageBoxOptions } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { spawn, spawnSync } from 'child_process';
 import * as path from 'path';
 import { runPcScan } from './pcScanner';
 
 let mainWindow: BrowserWindow | null = null;
+
+autoUpdater.autoDownload = true;
+
+function setupAutoUpdates(): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  autoUpdater.on('error', (error) => {
+    console.error('Auto update error:', error);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    const version = info.version || 'the latest version';
+    const messageOptions: MessageBoxOptions = {
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update ready',
+      message: `PC Checker ${version} has been downloaded.`,
+      detail: 'Restart the app to install the update.',
+    };
+    const message = mainWindow
+      ? dialog.showMessageBox(mainWindow, messageOptions)
+      : dialog.showMessageBox(messageOptions);
+
+    void message.then(({ response }) => {
+      if (response === 0) {
+        autoUpdater.quitAndInstall();
+      }
+    });
+  });
+}
+
+function checkForUpdates(): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  autoUpdater.checkForUpdates().catch((error) => {
+    console.error('Could not check for updates:', error);
+  });
+}
+
+function getAppIconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'build', 'app-icon.png')
+    : path.join(__dirname, '..', 'build', 'app-icon.png');
+}
 
 function isRunningAsAdmin(): boolean {
   if (process.platform !== 'win32') {
@@ -64,26 +114,11 @@ ipcMain.handle('app:get-admin-info', () => ({
 }));
 ipcMain.handle('scan:run-pc-scan', () => runPcScan());
 
-function configureAutoUpdates(): void {
-  if (!app.isPackaged) {
-    return;
-  }
-
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on('error', (error) => {
-    console.error('Auto-update error:', error);
-  });
-
-  setTimeout(() => {
-    void autoUpdater.checkForUpdatesAndNotify();
-  }, 3000);
-}
-
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: getAppIconPath(),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -105,6 +140,7 @@ function createWindow(): void {
     console.log('Loading index.html from:', indexPath);
     mainWindow.loadFile(indexPath).then(() => {
       console.log('Index.html loaded successfully');
+      checkForUpdates();
     }).catch((err) => {
       console.error('Failed to load index.html:', err);
     });
@@ -123,8 +159,8 @@ app.whenReady().then(() => {
     return;
   }
 
+  setupAutoUpdates();
   createWindow();
-  configureAutoUpdates();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

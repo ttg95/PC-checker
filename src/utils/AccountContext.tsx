@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { isSupabaseConfigured, supabase, supabaseProjectUrl, type ExclusionRow, type ProfileRow } from './supabase';
+import { createClient } from '@supabase/supabase-js';
+import { isSupabaseConfigured, supabase, supabaseProjectUrl, supabasePublicAnonKey, type ExclusionRow, type ProfileRow } from './supabase';
 
 export interface Account {
   id: string;
@@ -35,6 +36,7 @@ interface AccountContextValue {
   refreshAccountLink: () => Promise<void>;
   createAccount: (input: CreateAccountInput) => Promise<Account>;
   login: (email: string, password: string) => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<void>;
   logout: () => void;
   addCredits: (accountId: string, amount: number) => Promise<void>;
   setCredits: (accountId: string, amount: number) => Promise<void>;
@@ -165,10 +167,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       }
 
       const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userData.user.id)
-        .single();
+        .rpc('sync_current_user_profile');
 
       if (profileError || !profile) {
         setAccountsState([]);
@@ -269,7 +268,17 @@ export function AccountProvider({ children }: { children: ReactNode }) {
           initialCredits: Math.max(0, Math.floor(input.initialCredits ?? 0)),
         },
       });
-      if (error) throw error;
+      if (error) {
+        return createAccountWithSignupFallback({
+          email: normalizedEmail,
+          password: input.password,
+          initialCredits: Math.max(0, Math.floor(input.initialCredits ?? 0)),
+          edgeError: await getFunctionErrorMessage(error),
+        });
+      }
+      if (!data?.account) {
+        throw new Error('Account function did not return an account.');
+      }
       await refreshSupabaseState();
       return fromProfile(data.account as ProfileRow);
     }
@@ -298,12 +307,77 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       email: normalizedEmail,
       passwordHash: '',
       salt: '',
-      role: 'master',
-      credits: null,
+      role: 'standard',
+      credits: 0,
       createdAt: new Date().toISOString(),
       lastLoginAt: null,
     };
     return profile ? fromProfile(profile as ProfileRow) : fallbackAccount;
+  };
+
+  const createAccountWithSignupFallback = async ({
+    email,
+    password,
+    initialCredits,
+    edgeError,
+  }: {
+    email: string;
+    password: string;
+    initialCredits: number;
+    edgeError: string;
+  }): Promise<Account> => {
+    if (!isSupabaseConfigured || !supabase) {
+      throw new Error('Account storage is not configured.');
+    }
+
+    const isolatedClient = createClient(supabaseProjectUrl, supabasePublicAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
+
+    const { data: signupData, error: signupError } = await isolatedClient.auth.signUp({ email, password });
+    if (signupError) {
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (existingProfile) {
+        const { data: repairedProfile, error: repairError } = await supabase
+          .from('profiles')
+          .update({ role: 'standard', credits: initialCredits })
+          .eq('id', existingProfile.id)
+          .select('*')
+          .single();
+        if (repairError) throw repairError;
+        await refreshSupabaseState();
+        return fromProfile(repairedProfile as ProfileRow);
+      }
+
+      throw new Error(`Edge function failed: ${edgeError}. Fallback signup failed: ${signupError.message}`);
+    }
+
+    if (!signupData.user) {
+      throw new Error(`Edge function failed: ${edgeError}. Fallback signup did not return a user.`);
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .update({ role: 'standard', credits: initialCredits })
+      .eq('id', signupData.user.id)
+      .select('*')
+      .single();
+
+    if (profileError) {
+      throw new Error(`Edge function failed: ${edgeError}. Fallback account was created, but credits could not be set: ${profileError.message}`);
+    }
+
+    await refreshSupabaseState();
+    return fromProfile(profile as ProfileRow);
   };
 
   const login = async (email: string, password: string) => {
@@ -311,7 +385,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
     if (isSupabaseConfigured && supabase) {
       const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password });
-      if (error) throw error;
+      if (error) {
+        if (error.message.toLowerCase().includes('invalid login credentials')) {
+          throw new Error('Email or password is incorrect.');
+        }
+        throw error;
+      }
       if (data.user) {
         await supabase
           .from('profiles')
@@ -335,6 +414,21 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     const next = accounts.map(item => item.id === account.id ? { ...item, lastLoginAt: new Date().toISOString() } : item);
     persistLocalAccounts(next);
     setActiveId(account.id);
+  };
+
+  const requestPasswordReset = async (email: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      throw new Error('Enter the email address for the account first.');
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail);
+      if (error) throw error;
+      return;
+    }
+
+    throw new Error('Password reset is only available for connected accounts.');
   };
 
   const logout = () => {
@@ -484,6 +578,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       refreshAccountLink: refreshSupabaseState,
       createAccount,
       login,
+      requestPasswordReset,
       logout,
       addCredits,
       setCredits,
@@ -502,4 +597,25 @@ export function useAccounts() {
   const ctx = useContext(AccountContext);
   if (!ctx) throw new Error('useAccounts must be used within AccountProvider');
   return ctx;
+}
+
+async function getFunctionErrorMessage(error: unknown): Promise<string> {
+  const candidate = error as { message?: string; context?: unknown };
+  const response = candidate.context;
+
+  if (response instanceof Response) {
+    try {
+      const payload = await response.clone().json() as { error?: string };
+      if (payload.error) return payload.error;
+    } catch {
+      try {
+        const text = await response.clone().text();
+        if (text.trim()) return text.trim();
+      } catch {
+        // Fall through to the Supabase error message.
+      }
+    }
+  }
+
+  return candidate.message || 'Edge function returned an error.';
 }

@@ -1,22 +1,66 @@
 {
-  "name": "pc-checker-electron",
+  "name": "pc-checktool",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && tsc -p electron/tsconfig.json",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
-    "electron:dev": "set NODE_ENV=development&& concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "npm run build && tsc -p electron/tsconfig.json",
-    "electron:start": "electron .",
-    "release": "npm run build && tsc -p electron/tsconfig.json && electron-builder --win --publish always"
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "electron:publish": "npm run build && electron-builder --publish always",
+    "release": "npm run electron:publish",
+    "electron": "cross-env NODE_ENV=production electron .",
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  },
+  "build": {
+    "appId": "com.pcchecker.app",
+    "productName": "PC Checker",
+    "electronDist": "node_modules/electron/dist",
+    "artifactName": "PC-Checker-Setup.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ttg95",
+        "repo": "PC-checker",
+        "releaseType": "release"
+      }
+    ],
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/app-icon.png",
+        "to": "build/app-icon.png"
+      }
+    ],
+    "win": {
+      "icon": "build/app-icon.ico",
+      "target": "nsis",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "installerIcon": "build/installer-icon.ico",
+      "uninstallerIcon": "build/installer-icon.ico",
+      "installerHeaderIcon": "build/installer-icon.ico",
+      "oneClick": true,
+      "perMachine": false
+    }
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
     "@types/papaparse": "^5.5.2",
+    "electron-squirrel-startup": "^1.0.1",
     "electron-updater": "^6.8.9",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
@@ -27,15 +71,23 @@
     "react-router-dom": "^6.30.4"
   },
   "devDependencies": {
+    "@electron-forge/cli": "^7.6.1",
+    "@electron-forge/maker-deb": "^7.11.2",
+    "@electron-forge/maker-rpm": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron/fuses": "^1.8.0",
     "@eslint/js": "^9.9.1",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.18",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
     "electron": "^42.4.0",
     "electron-builder": "^26.15.3",
-    "electron-packager": "^17.1.2",
     "eslint": "^9.9.1",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
@@ -45,35 +97,8 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
     "vite": "^8.0.16",
-    "wait-on": "^8.0.5"
-  },
-  "build": {
-    "appId": "com.pcchecker.app",
-    "productName": "PC Checker",
-    "artifactName": "PC-Checker-Setup.${ext}",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*"
-    ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "ttg95",
-        "repo": "PC-checker",
-        "releaseType": "release"
-      }
-    ],
-    "win": {
-      "target": "nsis",
-      "requestedExecutionLevel": "requireAdministrator"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "differentialPackage": false
-    }
+    "vite-plugin-electron": "^1.0.4",
+    "vite-plugin-electron-renderer": "^1.0.0",
+    "wait-on": "^9.0.10"
   }
 }

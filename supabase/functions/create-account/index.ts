@@ -56,6 +56,39 @@ Deno.serve(async (req) => {
       return json({ error: 'Password must be at least 8 characters.' }, 400);
     }
 
+    const { data: existingProfile } = await adminClient
+      .from('profiles')
+      .select('*')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (existingProfile) {
+      const { error: updateAuthError } = await adminClient.auth.admin.updateUserById(existingProfile.id, {
+        password,
+        email_confirm: true,
+      });
+
+      if (updateAuthError) {
+        return json({ error: updateAuthError.message }, 400);
+      }
+
+      const { data: repairedAccount, error: repairError } = await adminClient
+        .from('profiles')
+        .update({
+          role: 'standard',
+          credits: initialCredits,
+        })
+        .eq('id', existingProfile.id)
+        .select('*')
+        .single();
+
+      if (repairError) {
+        return json({ error: repairError.message }, 500);
+      }
+
+      return json({ account: repairedAccount, repaired: true }, 200);
+    }
+
     const { data: created, error: createError } = await adminClient.auth.admin.createUser({
       email,
       password,
@@ -72,8 +105,13 @@ Deno.serve(async (req) => {
 
     const { data: account, error: accountError } = await adminClient
       .from('profiles')
+      .upsert({
+        id: created.user.id,
+        email,
+        role: 'standard',
+        credits: initialCredits,
+      }, { onConflict: 'id' })
       .select('*')
-      .eq('id', created.user.id)
       .single();
 
     if (accountError) {

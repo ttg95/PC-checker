@@ -8,11 +8,7 @@ lerna-debug.log*
 
 node_modules
 dist
-dist-electron
-dist-electron-app
-release
-temp-extract
-temp-extract-new
+dist-electron/
 dist-ssr
 *.local
 
@@ -26,3 +22,7 @@ dist-ssr
 *.sln
 *.sw?
 .env
+supabase/.temp/
+
+out/
+release/

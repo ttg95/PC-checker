@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Cable, Clock, Cpu, Unplug } from 'lucide-react';
+import { AlertTriangle, Cable, Clock, Cpu, Plug, Unplug } from 'lucide-react';
 import { useScan } from '../../utils/ScanContext';
 import type { DmaDeviceEntry, EventLogEntry, RiskLevel } from '../../types';
 import { formatTimestamp } from '../../utils/id';
@@ -65,6 +65,10 @@ export default function UsbActivity() {
   ];
 
   const visibleCount = viewMode === 'events' ? filteredEvents.length : filteredDevices.length;
+  const insertEvents = usbEvents.filter(e => e.eventCategory === 'usb_connect' || e.eventCategory === 'device_config');
+  const unplugEvents = usbEvents.filter(e => e.eventCategory === 'usb_disconnect' || e.eventCategory === 'device_delete');
+  const descriptorFailures = usbEvents.filter(e => e.message.toLowerCase().includes('descriptor'));
+  const recentTimeline = usbEvents.slice(0, 12);
 
   return (
     <div className="p-6 space-y-6 max-w-7xl">
@@ -76,10 +80,31 @@ export default function UsbActivity() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <SummaryCard icon={<Clock className="w-4 h-4 text-cyan-400" />} label="USB Events" value={usbEvents.length} />
-        <SummaryCard icon={<Cpu className="w-4 h-4 text-blue-400" />} label="USB Devices" value={usbDevices.length} />
-        <SummaryCard icon={<Unplug className="w-4 h-4 text-red-400" />} label="Disconnect/Delete Events" value={usbEvents.filter(e => e.eventCategory === 'usb_disconnect' || e.eventCategory === 'device_delete').length} />
+        <SummaryCard icon={<Plug className="w-4 h-4 text-blue-400" />} label="Insert/Config" value={insertEvents.length} />
+        <SummaryCard icon={<Unplug className="w-4 h-4 text-red-400" />} label="Unplug/Delete" value={unplugEvents.length} />
+        <SummaryCard icon={<AlertTriangle className="w-4 h-4 text-amber-400" />} label="Descriptor Fails" value={descriptorFailures.length} />
+      </div>
+
+      <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-200">USB Insert and Unplug Timeline</h2>
+            <p className="text-xs text-slate-500 mt-1">{usbDevices.length} USB-like devices inventoried</p>
+          </div>
+          <Cpu className="w-5 h-5 text-slate-500" />
+        </div>
+        <div className="space-y-2">
+          {recentTimeline.map(event => (
+            <div key={event.id} className="grid lg:grid-cols-[170px_160px_minmax(0,1fr)] gap-3 rounded-lg border border-slate-700/50 bg-slate-800/40 px-3 py-2">
+              <span className="text-xs text-slate-400 whitespace-nowrap">{formatTimestamp(event.timestamp)}</span>
+              <ActionBadge value={event.eventCategory} />
+              <span className="text-xs text-slate-300 line-clamp-2">{event.message || event.source}</span>
+            </div>
+          ))}
+          {recentTimeline.length === 0 && <p className="text-sm text-slate-500">No USB insert or unplug events found in the current scan.</p>}
+        </div>
       </div>
 
       <div className="flex items-center gap-2">

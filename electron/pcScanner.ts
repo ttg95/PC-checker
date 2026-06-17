@@ -405,11 +405,12 @@ async function scanEventLogs() {
     Message?: string;
   }>(`
     $queries = @(
-      @{ LogName='System'; Id=@(20001,20003,219,410,420,7045) },
+      @{ LogName='System'; Id=@(20001,20003,20004,219,410,420,7045) },
       @{ LogName='Application'; Id=@(1000,11707,3079) },
       @{ LogName='Microsoft-Windows-Windows Defender/Operational'; Id=@(1116,1117,5007) },
       @{ LogName='Microsoft-Windows-Kernel-PnP/Configuration'; Id=@(410,420) },
-      @{ LogName='Microsoft-Windows-Partition/Diagnostic'; Id=@(1000,1001) }
+      @{ LogName='Microsoft-Windows-Partition/Diagnostic'; Id=@(1000,1001) },
+      @{ LogName='Microsoft-Windows-DriverFrameworks-UserMode/Operational'; Id=@(2003,2004,2100,2101,2102) }
     )
     foreach ($query in $queries) {
       Get-WinEvent -FilterHashtable @{ LogName=$query.LogName; Id=$query.Id; StartTime=(Get-Date).AddDays(-45) } -MaxEvents 100 -ErrorAction SilentlyContinue |
@@ -428,10 +429,23 @@ async function scanEventLogs() {
   return rows.map(row => {
     const text = `${row.ProviderName || ''} ${row.Message || ''}`;
     const lower = text.toLowerCase();
-    const eventCategory = row.Id === 420
+    const idValue = Number(row.Id || 0);
+    const isDisconnect = [1001, 20003, 20004, 2004, 2102].includes(idValue)
+      || lower.includes('removed')
+      || lower.includes('disconnect')
+      || lower.includes('unplug')
+      || lower.includes('surprise removal');
+    const isConnect = [1000, 20001, 2003, 2100, 2101].includes(idValue)
+      || lower.includes('connected')
+      || lower.includes('started')
+      || lower.includes('arrived')
+      || lower.includes('configured');
+    const eventCategory = idValue === 420
       ? 'device_delete'
-      : row.Id === 410 || lower.includes('usb')
-        ? 'usb_connect'
+      : isDisconnect
+        ? 'usb_disconnect'
+        : idValue === 410 || isConnect || lower.includes('usb')
+          ? 'usb_connect'
         : row.Id === 1116 || row.Id === 1117
           ? 'defender_threat'
           : row.Id === 5007

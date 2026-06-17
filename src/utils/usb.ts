@@ -14,12 +14,19 @@ const usbTerms = [
 ];
 
 export function isUsbEvent(item: EventLogEntry): boolean {
-  if (item.eventCategory === 'usb_connect' || item.eventCategory === 'usb_disconnect') {
+  if (
+    item.eventCategory === 'usb_connect'
+    || item.eventCategory === 'usb_disconnect'
+    || item.eventCategory === 'device_config'
+    || item.eventCategory === 'device_delete'
+  ) {
     return true;
   }
 
   const text = `${item.logChannel} ${item.source} ${item.message}`.toLowerCase();
-  return item.eventCategory === 'device_delete'
+  const isDriverFrameworkEvent = item.logChannel.toLowerCase().includes('driverframeworks-usermode')
+    || item.source.toLowerCase().includes('driverframeworks-usermode');
+  return isDriverFrameworkEvent
     ? usbTerms.some(term => text.includes(term))
     : usbTerms.some(term => text.includes(term)) && text.includes('device');
 }
