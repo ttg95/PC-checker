@@ -14,6 +14,7 @@ import {
   Cable,
   LogIn,
   Crown,
+  Wallet,
 } from 'lucide-react';
 import { useAccounts } from '../../utils/AccountContext';
 import { useNavigationOrder, type NavItemId } from '../../utils/NavigationContext';
@@ -32,6 +33,7 @@ const navIcons: Record<NavItemId, typeof LayoutDashboard> = {
   processes: Activity,
   reports: FileDown,
   accounts: LogIn,
+  tokens: Wallet,
   master: Crown,
   admin: UserCog,
 };

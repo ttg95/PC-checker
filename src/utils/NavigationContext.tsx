@@ -15,6 +15,7 @@ export type NavItemId =
   | 'processes'
   | 'reports'
   | 'accounts'
+  | 'tokens'
   | 'master'
   | 'admin';
 
@@ -34,6 +35,8 @@ interface NavigationContextValue {
 
 export const defaultNavItems: NavItemConfig[] = [
   { id: 'dashboard', to: '/', label: 'Dashboard' },
+  { id: 'accounts', to: '/accounts', label: 'Sign In' },
+  { id: 'tokens', to: '/tokens', label: 'Buy Tokens' },
   { id: 'registry', to: '/registry', label: 'Registry Analysis' },
   { id: 'events', to: '/events', label: 'Event Viewer' },
   { id: 'apphistory', to: '/apphistory', label: 'Application History' },
@@ -45,13 +48,13 @@ export const defaultNavItems: NavItemConfig[] = [
   { id: 'tasks', to: '/tasks', label: 'Scheduled Tasks' },
   { id: 'processes', to: '/processes', label: 'Running Processes' },
   { id: 'reports', to: '/reports', label: 'Export Reports' },
-  { id: 'accounts', to: '/accounts', label: 'Sign In' },
   { id: 'master', to: '/master', label: 'Master Settings', masterOnly: true },
   { id: 'admin', to: '/admin', label: 'Admin Panel', masterOnly: true },
 ];
 
 const STORAGE_KEY = 'pc-checker-nav-order-v1';
 const defaultNavOrder = defaultNavItems.map(item => item.id);
+const pinnedNavOrder: NavItemId[] = ['dashboard', 'accounts', 'tokens'];
 const validNavIds = new Set<NavItemId>(defaultNavOrder);
 const NavigationContext = createContext<NavigationContextValue | null>(null);
 
@@ -68,9 +71,14 @@ function loadStoredOrder(): NavItemId[] {
 function normalizeNavOrder(value: unknown): NavItemId[] {
   if (!Array.isArray(value)) return defaultNavOrder;
 
-  const ordered = value.filter((item): item is NavItemId => typeof item === 'string' && validNavIds.has(item as NavItemId));
+  const ordered = value.filter((item): item is NavItemId => (
+    typeof item === 'string' &&
+    validNavIds.has(item as NavItemId) &&
+    !pinnedNavOrder.includes(item as NavItemId)
+  ));
   const missing = defaultNavOrder.filter(item => !ordered.includes(item));
-  return [...ordered, ...missing];
+  const rest = [...ordered, ...missing].filter(item => !pinnedNavOrder.includes(item));
+  return [...pinnedNavOrder, ...rest];
 }
 
 export function NavigationProvider({ children }: { children: ReactNode }) {

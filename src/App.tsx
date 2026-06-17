@@ -19,6 +19,7 @@ import SystemInfoPage from './components/systeminfo/SystemInfo';
 import ExportReports from './components/reports/ExportReports';
 import AdminPanel from './components/admin/AdminPanel';
 import Accounts from './components/accounts/Accounts';
+import TokenPurchase from './components/tokens/TokenPurchase';
 import MasterSettings from './components/master/MasterSettings';
 
 function App() {
@@ -44,6 +45,7 @@ function App() {
                   <Route path="/processes" element={<RunningProcesses />} />
                   <Route path="/reports" element={<ExportReports />} />
                   <Route path="/accounts" element={<Accounts />} />
+                  <Route path="/tokens" element={<TokenPurchase />} />
                   <Route path="/master" element={<MasterOnly><MasterSettings /></MasterOnly>} />
                   <Route path="/admin" element={<MasterOnly><AdminPanel /></MasterOnly>} />
                 </Route>
