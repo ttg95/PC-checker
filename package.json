@@ -1,7 +1,7 @@
 {
   "name": "pc-checktool",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -52,6 +52,7 @@
       "installerIcon": "build/installer-icon.ico",
       "uninstallerIcon": "build/installer-icon.ico",
       "installerHeaderIcon": "build/installer-icon.ico",
+      "differentialPackage": false,
       "oneClick": true,
       "perMachine": false
     }
