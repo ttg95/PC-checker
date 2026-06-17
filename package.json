@@ -1,7 +1,7 @@
 {
   "name": "pc-checker-electron",
   "private": true,
-  "version": "0.0.2",
+  "version": "1.0.1",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -62,7 +62,8 @@
       {
         "provider": "github",
         "owner": "ttg95",
-        "repo": "PC-checker"
+        "repo": "PC-checker",
+        "releaseType": "release"
       }
     ],
     "win": {
