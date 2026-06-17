@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import { spawn, spawnSync } from 'child_process';
 import * as path from 'path';
 import { runPcScan } from './pcScanner';
@@ -63,6 +64,22 @@ ipcMain.handle('app:get-admin-info', () => ({
 }));
 ipcMain.handle('scan:run-pc-scan', () => runPcScan());
 
+function configureAutoUpdates(): void {
+  if (!app.isPackaged) {
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', (error) => {
+    console.error('Auto-update error:', error);
+  });
+
+  setTimeout(() => {
+    void autoUpdater.checkForUpdatesAndNotify();
+  }, 3000);
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -107,6 +124,7 @@ app.whenReady().then(() => {
   }
 
   createWindow();
+  configureAutoUpdates();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
