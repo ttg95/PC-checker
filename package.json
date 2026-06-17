@@ -1,7 +1,7 @@
 {
   "name": "pc-checktool",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -21,7 +21,6 @@
   "build": {
     "appId": "com.pcchecker.app",
     "productName": "PC Checker",
-    "electronDist": "node_modules/electron/dist",
     "artifactName": "PC-Checker-Setup.${ext}",
     "directories": {
       "output": "release"
