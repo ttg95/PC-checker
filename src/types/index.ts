@@ -154,6 +154,12 @@ export interface RiskRule {
   weight: number;
 }
 
+export interface TriggerConfig {
+  rules: RiskRule[];
+  cheatProviders: string[];
+  nonStandardPaths: string[];
+}
+
 export interface ReportConfig {
   machineName: string;
   scanTimestamp: string;

@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowDown, ArrowUp, Ban, CheckCircle2, Crown, Database, Download, Eye, ListChecks, Loader2, Palette, Plus, RotateCcw, ShieldCheck, Trash2, UserPlus, Users, XCircle, Clock } from 'lucide-react';
+import { ArrowDown, ArrowUp, Ban, CheckCircle2, Clock, Crown, Database, Download, Eye, ListChecks, Loader2, Palette, Plus, RotateCcw, Save, ShieldCheck, Trash2, UserPlus, Users, XCircle } from 'lucide-react';
 import { useAccounts, type Account } from '../../utils/AccountContext';
 import { useScan } from '../../utils/ScanContext';
 import { useTheme, type AppTheme } from '../../utils/ThemeContext';
 import { useNavigationOrder, type NavItemId } from '../../utils/NavigationContext';
-import { cheatProviders, defaultRules, nonStandardPaths } from '../../utils/riskEngine';
+import { defaultTriggerConfig } from '../../utils/riskEngine';
 import { formatTimestamp } from '../../utils/id';
-import { downloadStoredScanReport, fetchScanReports, updateScanReportReview } from '../../utils/reportStorage';
-import type { ScanResult } from '../../types';
+import { downloadStoredScanReport, fetchScanReports, hideScanReport, updateScanReportReview } from '../../utils/reportStorage';
+import type { RiskLevel, RiskRule, ScanResult, TriggerConfig } from '../../types';
 import type { ScanReportRow, ScanReviewStatus } from '../../utils/supabase';
 
 export default function MasterSettings() {
@@ -21,7 +21,10 @@ export default function MasterSettings() {
     addCredits,
     setCredits,
     addExclusion,
+    updateExclusion,
     removeExclusion,
+    triggerConfig,
+    saveTriggerConfig,
     isSupabaseBacked,
   } = useAccounts();
   const { loadReviewScan } = useScan();
@@ -32,11 +35,17 @@ export default function MasterSettings() {
   const [initialCredits, setInitialCredits] = useState(5);
   const [creditEdits, setCreditEdits] = useState<Record<string, number>>({});
   const [exclusionTerm, setExclusionTerm] = useState('');
+  const [exclusionEdits, setExclusionEdits] = useState<Record<string, string>>({});
+  const [ruleDrafts, setRuleDrafts] = useState<RiskRule[]>(triggerConfig.rules);
+  const [cheatProviderText, setCheatProviderText] = useState(triggerConfig.cheatProviders.join('\n'));
+  const [nonStandardPathText, setNonStandardPathText] = useState(triggerConfig.nonStandardPaths.join('\n'));
   const [scanReports, setScanReports] = useState<ScanReportRow[]>([]);
   const [isReportsLoading, setIsReportsLoading] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [openingReviewId, setOpeningReviewId] = useState<string | null>(null);
+  const [hidingReportId, setHidingReportId] = useState<string | null>(null);
+  const [savingTriggers, setSavingTriggers] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +68,12 @@ export default function MasterSettings() {
   useEffect(() => {
     void loadScanReports();
   }, [isSupabaseBacked]);
+
+  useEffect(() => {
+    setRuleDrafts(triggerConfig.rules);
+    setCheatProviderText(triggerConfig.cheatProviders.join('\n'));
+    setNonStandardPathText(triggerConfig.nonStandardPaths.join('\n'));
+  }, [triggerConfig]);
 
   const handleCreate = async () => {
     setMessage(null);
@@ -98,6 +113,65 @@ export default function MasterSettings() {
       setMessage('Exclusion removed.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not remove exclusion.');
+    }
+  };
+
+  const handleUpdateExclusion = async (id: string, fallbackTerm: string) => {
+    setMessage(null);
+    setError(null);
+    try {
+      await updateExclusion(id, exclusionEdits[id] ?? fallbackTerm);
+      setExclusionEdits(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setMessage('Exclusion updated.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update exclusion.');
+    }
+  };
+
+  const updateRuleDraft = <K extends keyof RiskRule>(index: number, key: K, value: RiskRule[K]) => {
+    setRuleDrafts(current => current.map((rule, ruleIndex) => (
+      ruleIndex === index ? { ...rule, [key]: value } : rule
+    )));
+  };
+
+  const handleAddRule = () => {
+    setRuleDrafts(current => [
+      ...current,
+      {
+        id: `custom-rule-${Date.now()}`,
+        name: 'New Rule',
+        description: '',
+        condition: 'text:example',
+        riskLevel: 'low',
+        enabled: true,
+        weight: 10,
+      },
+    ]);
+  };
+
+  const handleRemoveRule = (index: number) => {
+    setRuleDrafts(current => current.filter((_, ruleIndex) => ruleIndex !== index));
+  };
+
+  const handleSaveTriggers = async (config?: TriggerConfig) => {
+    setMessage(null);
+    setError(null);
+    setSavingTriggers(true);
+    try {
+      await saveTriggerConfig(config ?? {
+        rules: ruleDrafts,
+        cheatProviders: parseEditableList(cheatProviderText),
+        nonStandardPaths: parseEditableList(nonStandardPathText),
+      });
+      setMessage('Trigger reference updated.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update trigger reference.');
+    } finally {
+      setSavingTriggers(false);
     }
   };
 
@@ -165,6 +239,22 @@ export default function MasterSettings() {
       setError(err instanceof Error ? err.message : 'Could not update scan review.');
     } finally {
       setReviewingId(null);
+    }
+  };
+
+  const handleHideReport = async (reportId: string) => {
+    if (!activeAccount) return;
+    setMessage(null);
+    setError(null);
+    setHidingReportId(reportId);
+    try {
+      await hideScanReport(reportId, activeAccount.id);
+      setScanReports(current => current.filter(report => report.id !== reportId));
+      setMessage('Scan hidden from master review.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not hide scan.');
+    } finally {
+      setHidingReportId(null);
     }
   };
 
@@ -314,6 +404,15 @@ export default function MasterSettings() {
                           >
                             {reviewingId === `${report.id}:confirmed_cheating` ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
                             Fail
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleHideReport(report.id)}
+                            disabled={hidingReportId !== null}
+                            className="flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs font-medium text-slate-300 hover:border-red-500/40 hover:text-red-200 disabled:opacity-50"
+                          >
+                            {hidingReportId === report.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                            Hide
                           </button>
                         </div>
                       </td>
@@ -477,48 +576,150 @@ export default function MasterSettings() {
       </section>
 
       <section className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-5">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="w-5 h-5 text-amber-300" />
-          <h2 className="text-sm font-semibold text-slate-200">Trigger Reference and Exclusions</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-amber-300" />
+            <h2 className="text-sm font-semibold text-slate-200">Trigger Reference and Exclusions</h2>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setRuleDrafts(defaultTriggerConfig.rules);
+                setCheatProviderText(defaultTriggerConfig.cheatProviders.join('\n'));
+                setNonStandardPathText(defaultTriggerConfig.nonStandardPaths.join('\n'));
+              }}
+              className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-medium text-slate-300 hover:border-cyan-500/40"
+            >
+              <RotateCcw className="h-4 w-4" />
+              Reset Draft
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveTriggers(defaultTriggerConfig)}
+              disabled={savingTriggers}
+              className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-medium text-slate-300 hover:border-cyan-500/40 disabled:opacity-50"
+            >
+              <RotateCcw className="h-4 w-4" />
+              Save Defaults
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveTriggers()}
+              disabled={savingTriggers}
+              className="flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {savingTriggers ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Save Triggers
+            </button>
+          </div>
         </div>
 
-        <div className="grid xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.6fr)] gap-5">
+        <div className="grid xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.55fr)] gap-5">
           <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <ListChecks className="w-4 h-4 text-cyan-400" />
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Rules and Corresponding Triggers</h3>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <ListChecks className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Rules and Behaviours</h3>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddRule}
+                className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700"
+              >
+                <Plus className="h-4 w-4" />
+                Add Rule
+              </button>
             </div>
             <div className="overflow-x-auto rounded-lg border border-slate-700/50">
-              <table className="min-w-[1100px] w-full text-sm">
+              <table className="min-w-[1180px] w-full text-sm">
                 <thead className="bg-slate-800/80 text-xs uppercase tracking-wider text-slate-400">
                   <tr>
+                    <th className="text-left px-4 py-3 min-w-24">Enabled</th>
                     <th className="text-left px-4 py-3 min-w-64">Rule</th>
                     <th className="text-left px-4 py-3 min-w-80">Trigger</th>
                     <th className="text-left px-4 py-3 min-w-28">Level</th>
                     <th className="text-left px-4 py-3 min-w-24">Weight</th>
                     <th className="text-left px-4 py-3 min-w-96">Description</th>
+                    <th className="text-right px-4 py-3 min-w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {defaultRules.map(rule => (
-                    <tr key={rule.id} className="bg-slate-900/40">
-                      <td className="px-4 py-3 text-slate-100 font-medium">{rule.name}</td>
-                      <td className="px-4 py-3 text-slate-300 font-mono text-xs break-all">{rule.condition}</td>
+                  {ruleDrafts.map((rule, index) => (
+                    <tr key={rule.id} className="bg-slate-900/40 align-top">
                       <td className="px-4 py-3">
-                        <span className="inline-flex px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-xs uppercase">{rule.riskLevel}</span>
+                        <input
+                          type="checkbox"
+                          checked={rule.enabled}
+                          onChange={event => updateRuleDraft(index, 'enabled', event.target.checked)}
+                          className="h-4 w-4 accent-cyan-500"
+                        />
                       </td>
-                      <td className="px-4 py-3 text-slate-300">{rule.weight}</td>
-                      <td className="px-4 py-3 text-slate-400">{rule.description}</td>
+                      <td className="px-4 py-3">
+                        <input
+                          value={rule.name}
+                          onChange={event => updateRuleDraft(index, 'name', event.target.value)}
+                          className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          value={rule.condition}
+                          onChange={event => updateRuleDraft(index, 'condition', event.target.value)}
+                          className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1 font-mono text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          value={rule.riskLevel}
+                          onChange={event => updateRuleDraft(index, 'riskLevel', event.target.value as RiskLevel)}
+                          className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                        >
+                          <option value="none">none</option>
+                          <option value="low">low</option>
+                          <option value="medium">medium</option>
+                          <option value="high">high</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={rule.weight}
+                          onChange={event => updateRuleDraft(index, 'weight', Number(event.target.value))}
+                          className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <textarea
+                          value={rule.description}
+                          onChange={event => updateRuleDraft(index, 'description', event.target.value)}
+                          rows={2}
+                          className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm text-slate-300 focus:outline-none focus:border-cyan-500/50"
+                        />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRule(index)}
+                          className="rounded border border-slate-700 bg-slate-900 p-2 text-slate-400 hover:border-red-500/40 hover:text-red-300"
+                          aria-label="Remove rule"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            <p className="text-xs text-slate-500">Custom conditions support plain text, field:value, AND/OR, unsigned, signed:false, installedWithin(7), createdWithin(7), MATCHES cheatProviders, and MATCHES nonStandardPaths.</p>
           </div>
 
           <div className="space-y-4">
-            <TriggerList title="Cheat Provider Terms" items={cheatProviders} />
-            <TriggerList title="Non-standard Paths" items={nonStandardPaths} />
+            <EditableTextArea title="Cheat Provider Terms" value={cheatProviderText} onChange={setCheatProviderText} />
+            <EditableTextArea title="Non-standard Paths" value={nonStandardPathText} onChange={setNonStandardPathText} />
           </div>
         </div>
 
@@ -541,14 +742,24 @@ export default function MasterSettings() {
           </div>
           <div className="space-y-2">
             {exclusions.map(exclusion => (
-              <div key={exclusion.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50">
+              <div key={exclusion.id} className="grid md:grid-cols-[minmax(0,1fr)_auto] gap-3 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/50">
                 <div>
-                  <p className="text-sm text-slate-100 break-all">{exclusion.term}</p>
+                  <input
+                    value={exclusionEdits[exclusion.id] ?? exclusion.term}
+                    onChange={event => setExclusionEdits(prev => ({ ...prev, [exclusion.id]: event.target.value }))}
+                    className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm text-slate-100 focus:outline-none focus:border-cyan-500/50"
+                  />
                   <p className="text-xs text-slate-500">Added {formatTimestamp(exclusion.createdAt)}</p>
                 </div>
-                <button onClick={() => void handleRemoveExclusion(exclusion.id)} className="p-2 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10" aria-label="Remove exclusion">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => void handleUpdateExclusion(exclusion.id, exclusion.term)} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-700 text-xs text-slate-100 hover:bg-slate-600">
+                    <Save className="w-4 h-4" />
+                    Save
+                  </button>
+                  <button onClick={() => void handleRemoveExclusion(exclusion.id)} className="p-2 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-500/10" aria-label="Remove exclusion">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             ))}
             {exclusions.length === 0 && <p className="text-sm text-slate-500">No exclusions have been added.</p>}
@@ -601,19 +812,32 @@ function RoleBadge({ account }: { account: Account }) {
   );
 }
 
-function TriggerList({ title, items }: { title: string; items: string[] }) {
+function EditableTextArea({ title, value, onChange }: { title: string; value: string; onChange: (value: string) => void }) {
   return (
     <div className="rounded-lg bg-slate-800/50 border border-slate-700/50 p-4">
       <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">{title}</h3>
-      <div className="flex flex-wrap gap-2">
-        {items.map(item => (
-          <span key={item} className="px-2 py-1 rounded bg-slate-900 text-xs text-slate-300 border border-slate-700/50 break-all">
-            {item}
-          </span>
-        ))}
-      </div>
+      <textarea
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        rows={10}
+        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:outline-none focus:border-cyan-500/50"
+      />
+      <p className="mt-2 text-xs text-slate-500">One entry per line.</p>
     </div>
   );
+}
+
+function parseEditableList(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(item => {
+      const key = item.toLowerCase();
+      if (!item || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function ReviewBadge({ status }: { status: ScanReviewStatus }) {

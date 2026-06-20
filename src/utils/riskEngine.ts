@@ -1,13 +1,4 @@
-import type { RiskRule } from '../types';
-
-export const cheatProviders = ['shadow', 'phantom overlay', 'phantom', 'engineowning', 'ac diamond', 'cobalt', "lone's", 'atomic', 'aimex', 'clutch', 'kratos', 'ducks', 'ring-1', 'ring1', 'dma', 'injector', 'loader', 'cheat engine', 'cheatengine'];
-
-export const nonStandardPaths = ['\\AppData\\', '\\Temp\\', '\\Downloads\\', '\\Public\\', '\\tmp\\'];
-
-export function isKnownCheatProvider(name: string): boolean {
-  const lower = name.toLowerCase();
-  return cheatProviders.some(p => lower.includes(p));
-}
+import type { RiskRule, TriggerConfig } from '../types';
 
 export const defaultRules: RiskRule[] = [
   {
@@ -192,6 +183,38 @@ export const defaultRules: RiskRule[] = [
   },
 ];
 
+export const defaultTriggerConfig: TriggerConfig = {
+  rules: defaultRules,
+  cheatProviders: ['shadow', 'phantom overlay', 'phantom', 'engineowning', 'ac diamond', 'cobalt', "lone's", 'atomic', 'aimex', 'clutch', 'kratos', 'ducks', 'ring-1', 'ring1', 'dma', 'injector', 'loader', 'cheat engine', 'cheatengine'],
+  nonStandardPaths: ['\\AppData\\', '\\Temp\\', '\\Downloads\\', '\\Public\\', '\\tmp\\'],
+};
+
+let runtimeTriggerConfig: TriggerConfig = defaultTriggerConfig;
+
+export const cheatProviders = defaultTriggerConfig.cheatProviders;
+export const nonStandardPaths = defaultTriggerConfig.nonStandardPaths;
+
+export function normalizeTriggerConfig(input: Partial<TriggerConfig> | null | undefined): TriggerConfig {
+  return {
+    rules: normalizeRules(input?.rules),
+    cheatProviders: normalizeTerms(input?.cheatProviders, defaultTriggerConfig.cheatProviders),
+    nonStandardPaths: normalizeTerms(input?.nonStandardPaths, defaultTriggerConfig.nonStandardPaths),
+  };
+}
+
+export function setRuntimeTriggerConfig(input: Partial<TriggerConfig> | null | undefined) {
+  runtimeTriggerConfig = normalizeTriggerConfig(input);
+}
+
+export function getRuntimeTriggerConfig(): TriggerConfig {
+  return runtimeTriggerConfig;
+}
+
+export function isKnownCheatProvider(name: string): boolean {
+  const lower = name.toLowerCase();
+  return runtimeTriggerConfig.cheatProviders.some(p => lower.includes(p.toLowerCase()));
+}
+
 export function calculateItemRisk(
   item: {
     isSigned?: boolean | null;
@@ -206,7 +229,8 @@ export function calculateItemRisk(
     type?: string;
     eventCategory?: string;
   },
-  rules: RiskRule[] = defaultRules
+  rules: RiskRule[] = runtimeTriggerConfig.rules,
+  config: TriggerConfig = runtimeTriggerConfig,
 ): number {
   let score = 0;
   const now = new Date();
@@ -232,10 +256,10 @@ export function calculateItemRisk(
         if (item.isSigned === false && (item.category === 'primary' || item.category === 'MuiCache')) score += rule.weight;
         break;
       case 'rule-cheat-provider-name':
-        if (isKnownCheatProvider(pathOrName)) score += rule.weight;
+        if (config.cheatProviders.some(provider => pathOrName.includes(provider.toLowerCase()))) score += rule.weight;
         break;
       case 'rule-defender-exclusion-suspicious':
-        if (item.category === 'defender_exclusion' && item.path && nonStandardPaths.some(p => item.path!.includes(p))) score += rule.weight;
+        if (item.category === 'defender_exclusion' && item.path && config.nonStandardPaths.some(p => item.path!.toLowerCase().includes(p.toLowerCase()))) score += rule.weight;
         break;
       case 'rule-dma-device-unknown':
         if (item.category === 'dma' || (pathOrName.includes('dma') && pathOrName.includes('capture'))) score += rule.weight;
@@ -259,13 +283,13 @@ export function calculateItemRisk(
         if (item.eventCategory === 'journal_delete' || item.category === 'usn_journal') score += rule.weight;
         break;
       case 'rule-prefetch-suspicious':
-        if (item.category === 'prefetch' && (isKnownCheatProvider(pathOrName) || item.isSigned === false)) score += rule.weight;
+        if (item.category === 'prefetch' && (config.cheatProviders.some(provider => pathOrName.includes(provider.toLowerCase())) || item.isSigned === false)) score += rule.weight;
         break;
       case 'rule-hwid-spoof':
         if (item.category === 'hwid' && pathOrName.includes('spoof')) score += rule.weight;
         break;
       case 'rule-winrar-suspicious':
-        if ((item.category === 'winrar_history' || item.category === 'ArcHistory') && (isKnownCheatProvider(pathOrName) || pathOrName.includes('cheat') || pathOrName.includes('hack'))) score += rule.weight;
+        if ((item.category === 'winrar_history' || item.category === 'ArcHistory') && (config.cheatProviders.some(provider => pathOrName.includes(provider.toLowerCase())) || pathOrName.includes('cheat') || pathOrName.includes('hack'))) score += rule.weight;
         break;
       case 'rule-nvidia-suspicious-program':
         if (item.category === 'nvidia_program' && item.isSigned === false) score += rule.weight;
@@ -280,7 +304,7 @@ export function calculateItemRisk(
         if (item.category === 'restore_point') score += rule.weight;
         break;
       case 'rule-prefetch-in-temp':
-        if (item.path && nonStandardPaths.some(p => item.path!.includes(p)) && item.firstSeen) {
+        if (item.path && config.nonStandardPaths.some(p => item.path!.toLowerCase().includes(p.toLowerCase())) && item.firstSeen) {
           const days = Math.floor((now.getTime() - new Date(item.firstSeen).getTime()) / 86400000);
           if (days <= 7) score += rule.weight;
         }
@@ -288,8 +312,109 @@ export function calculateItemRisk(
       case 'rule-process-unsigned':
         if (item.isSigned === false) score += rule.weight;
         break;
+      default:
+        if (conditionMatchesItem(rule.condition, item, config, now)) score += rule.weight;
+        break;
     }
   }
 
   return Math.min(score, 100);
+}
+
+function normalizeRules(rules: RiskRule[] | undefined): RiskRule[] {
+  const source = Array.isArray(rules) && rules.length > 0 ? rules : defaultRules;
+  return source.map(rule => ({
+    id: String(rule.id || `rule-${crypto.randomUUID?.() || Date.now()}`),
+    name: String(rule.name || 'Untitled Rule'),
+    description: String(rule.description || ''),
+    condition: String(rule.condition || ''),
+    riskLevel: ['none', 'low', 'medium', 'high'].includes(rule.riskLevel) ? rule.riskLevel : 'low',
+    enabled: rule.enabled !== false,
+    weight: clampWeight(rule.weight),
+  }));
+}
+
+function normalizeTerms(terms: string[] | undefined, fallback: string[]): string[] {
+  const source = Array.isArray(terms) ? terms : fallback;
+  const seen = new Set<string>();
+  return source
+    .map(term => String(term).trim())
+    .filter(term => {
+      const key = term.toLowerCase();
+      if (term.length === 0 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function clampWeight(weight: number): number {
+  const numeric = Math.floor(Number(weight));
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function conditionMatchesItem(
+  condition: string,
+  item: Record<string, unknown>,
+  config: TriggerConfig,
+  now: Date,
+): boolean {
+  const normalized = condition.trim();
+  if (!normalized) return false;
+
+  return splitCondition(normalized, /\s+or\s+|\|\|/i).some(orPart => (
+    splitCondition(orPart, /\s+and\s+|&&/i).every(andPart => atomicConditionMatches(andPart, item, config, now))
+  ));
+}
+
+function splitCondition(condition: string, separator: RegExp): string[] {
+  return condition
+    .split(separator)
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+function atomicConditionMatches(rawCondition: string, item: Record<string, unknown>, config: TriggerConfig, now: Date): boolean {
+  const condition = rawCondition.replace(/^[()]+|[()]+$/g, '').trim();
+  const lowerCondition = condition.toLowerCase();
+  const text = JSON.stringify(item).toLowerCase();
+  const path = String(item.path || '').toLowerCase();
+
+  if (!condition) return true;
+  if (lowerCondition === 'unsigned' || lowerCondition === 'signed:false') return item.isSigned === false;
+  if (lowerCondition === 'signed:true') return item.isSigned === true;
+  if (lowerCondition.includes('cheatproviders')) {
+    return config.cheatProviders.some(term => text.includes(term.toLowerCase()));
+  }
+  if (lowerCondition.includes('nonstandardpaths') || lowerCondition.includes('suspiciouspath')) {
+    return config.nonStandardPaths.some(term => path.includes(term.toLowerCase()));
+  }
+
+  const withinMatch = lowerCondition.match(/(installedwithin|createdwithin)\((\d+)\)/);
+  if (withinMatch) {
+    const days = Number(withinMatch[2]);
+    const dateValue = withinMatch[1] === 'installedwithin'
+      ? item.installDate
+      : item.creationDate || item.lastWriteTime || item.firstSeen;
+    return isWithinDays(String(dateValue || ''), days, now);
+  }
+
+  const fieldMatch = condition.match(/^([a-zA-Z][\w]*)\s*(?::|=|contains|includes|matches)\s*(.+)$/);
+  if (fieldMatch) {
+    const [, field, value] = fieldMatch;
+    const normalizedValue = stripQuotes(value).toLowerCase();
+    return String(item[field] ?? '').toLowerCase().includes(normalizedValue);
+  }
+
+  return text.includes(stripQuotes(lowerCondition));
+}
+
+function isWithinDays(value: string, days: number, now: Date): boolean {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return false;
+  return Math.floor((now.getTime() - timestamp) / 86400000) <= days;
+}
+
+function stripQuotes(value: string): string {
+  return value.trim().replace(/^['"]|['"]$/g, '');
 }

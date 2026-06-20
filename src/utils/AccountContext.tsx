@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase, supabaseProjectUrl, supabasePublicAnonKey, type ExclusionRow, type ProfileRow } from './supabase';
+import type { TriggerConfig } from '../types';
+import { defaultTriggerConfig, normalizeTriggerConfig, setRuntimeTriggerConfig } from './riskEngine';
 
 export interface Account {
   id: string;
@@ -41,7 +43,10 @@ interface AccountContextValue {
   addCredits: (accountId: string, amount: number) => Promise<void>;
   setCredits: (accountId: string, amount: number) => Promise<void>;
   addExclusion: (term: string) => Promise<void>;
+  updateExclusion: (id: string, term: string) => Promise<void>;
   removeExclusion: (id: string) => Promise<void>;
+  triggerConfig: TriggerConfig;
+  saveTriggerConfig: (config: TriggerConfig) => Promise<void>;
   createCheckoutSession: (tokenCount: number) => Promise<string>;
   consumeScanCredit: () => Promise<{ ok: boolean; message?: string }>;
   canRunScan: boolean;
@@ -51,6 +56,7 @@ interface AccountContextValue {
 const STORAGE_KEY = 'pc-checker-accounts-v1';
 const ACTIVE_KEY = 'pc-checker-active-account-v1';
 const EXCLUSIONS_KEY = 'pc-checker-exclusions-v1';
+const TRIGGER_CONFIG_KEY = 'pc-checker-trigger-config-v1';
 
 const AccountContext = createContext<AccountContextValue | null>(null);
 
@@ -96,6 +102,15 @@ function loadExclusions(): Exclusion[] {
   }
 }
 
+function loadTriggerConfig(): TriggerConfig {
+  try {
+    const raw = localStorage.getItem(TRIGGER_CONFIG_KEY);
+    return normalizeTriggerConfig(raw ? JSON.parse(raw) as Partial<TriggerConfig> : defaultTriggerConfig);
+  } catch {
+    return defaultTriggerConfig;
+  }
+}
+
 function loadActiveId(): string | null {
   return localStorage.getItem(ACTIVE_KEY);
 }
@@ -126,6 +141,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const [accounts, setAccountsState] = useState<Account[]>(() => isSupabaseConfigured ? [] : loadAccounts());
   const [activeAccountId, setActiveAccountId] = useState<string | null>(() => isSupabaseConfigured ? null : loadActiveId());
   const [exclusions, setExclusionsState] = useState<Exclusion[]>(() => isSupabaseConfigured ? [] : loadExclusions());
+  const [triggerConfig, setTriggerConfigState] = useState<TriggerConfig>(() => isSupabaseConfigured ? defaultTriggerConfig : loadTriggerConfig());
   const [isAccountLoading, setIsAccountLoading] = useState(isSupabaseConfigured);
 
   const persistLocalAccounts = (next: Account[]) => {
@@ -149,10 +165,21 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(EXCLUSIONS_KEY, JSON.stringify(next));
   };
 
+  const persistLocalTriggerConfig = (next: TriggerConfig) => {
+    const normalized = normalizeTriggerConfig(next);
+    setTriggerConfigState(normalized);
+    setRuntimeTriggerConfig(normalized);
+    localStorage.setItem(TRIGGER_CONFIG_KEY, JSON.stringify(normalized));
+  };
+
   const activeAccount = useMemo(
     () => accounts.find(account => account.id === activeAccountId) || null,
     [accounts, activeAccountId],
   );
+
+  useEffect(() => {
+    setRuntimeTriggerConfig(triggerConfig);
+  }, [triggerConfig]);
 
   const refreshSupabaseState = useCallback(async () => {
     if (!isSupabaseConfigured || !supabase) return;
@@ -164,6 +191,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         setAccountsState([]);
         setActiveId(null);
         setExclusionsState([]);
+        setTriggerConfigState(defaultTriggerConfig);
+        setRuntimeTriggerConfig(defaultTriggerConfig);
         return;
       }
 
@@ -174,6 +203,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         setAccountsState([]);
         setActiveId(null);
         setExclusionsState([]);
+        setTriggerConfigState(defaultTriggerConfig);
+        setRuntimeTriggerConfig(defaultTriggerConfig);
         return;
       }
 
@@ -196,6 +227,17 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       if (exclusionsError) throw exclusionsError;
 
       setExclusionsState((exclusionRows as ExclusionRow[]).map(fromExclusion));
+
+      const { data: triggerSetting, error: triggerError } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'trigger_config')
+        .maybeSingle();
+      if (triggerError) throw triggerError;
+
+      const nextTriggerConfig = normalizeTriggerConfig((triggerSetting?.value as Partial<TriggerConfig> | null) ?? defaultTriggerConfig);
+      setTriggerConfigState(nextTriggerConfig);
+      setRuntimeTriggerConfig(nextTriggerConfig);
       setActiveId(activeProfile.id);
     } finally {
       setIsAccountLoading(false);
@@ -438,6 +480,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         setAccountsState([]);
         setActiveId(null);
         setExclusionsState([]);
+        setTriggerConfigState(defaultTriggerConfig);
+        setRuntimeTriggerConfig(defaultTriggerConfig);
       });
       return;
     }
@@ -483,7 +527,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const requireMaster = () => {
     if (activeAccount?.role !== 'master') {
-      throw new Error('Only the master account can edit exclusions.');
+      throw new Error('Only the master account can edit master settings.');
     }
   };
 
@@ -517,6 +561,29 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     ]);
   };
 
+  const updateExclusion = async (id: string, term: string) => {
+    requireMaster();
+    const normalized = term.trim();
+    if (normalized.length < 2) {
+      throw new Error('Exclusion must be at least 2 characters.');
+    }
+    if (exclusions.some(item => item.id !== id && item.term.toLowerCase() === normalized.toLowerCase())) {
+      throw new Error('That exclusion already exists.');
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase
+        .from('account_exclusions')
+        .update({ term: normalized })
+        .eq('id', id);
+      if (error) throw error;
+      await refreshSupabaseState();
+      return;
+    }
+
+    persistLocalExclusions(exclusions.map(item => item.id === id ? { ...item, term: normalized } : item));
+  };
+
   const removeExclusion = async (id: string) => {
     requireMaster();
 
@@ -528,6 +595,21 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
 
     persistLocalExclusions(exclusions.filter(item => item.id !== id));
+  };
+
+  const saveTriggerConfig = async (config: TriggerConfig) => {
+    requireMaster();
+    const normalized = normalizeTriggerConfig(config);
+
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase.rpc('set_trigger_config', { selected_config: normalized });
+      if (error) throw error;
+      setTriggerConfigState(normalized);
+      setRuntimeTriggerConfig(normalized);
+      return;
+    }
+
+    persistLocalTriggerConfig(normalized);
   };
 
   const createCheckoutSession = async (tokenCount: number) => {
@@ -612,7 +694,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       addCredits,
       setCredits,
       addExclusion,
+      updateExclusion,
       removeExclusion,
+      triggerConfig,
+      saveTriggerConfig,
       createCheckoutSession,
       consumeScanCredit,
       canRunScan: !isAccountLoading && !!activeAccount && (activeAccount.credits === null || activeAccount.credits > 0),

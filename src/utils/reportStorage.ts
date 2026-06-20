@@ -61,15 +61,21 @@ export async function uploadScanReport({
   return data as ScanReportRow;
 }
 
-export async function fetchScanReports(): Promise<ScanReportRow[]> {
+export async function fetchScanReports({ includeHidden = false }: { includeHidden?: boolean } = {}): Promise<ScanReportRow[]> {
   if (!isSupabaseConfigured || !supabase) {
     return [];
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('scan_reports')
     .select('*, profiles:owner_id(email)')
     .order('created_at', { ascending: false });
+
+  if (!includeHidden) {
+    query = query.is('hidden_at', null);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw error;
@@ -89,6 +95,24 @@ export async function updateScanReportReview(reportId: string, status: Exclude<S
       review_status: status,
       reviewed_by: reviewerId,
       reviewed_at: new Date().toISOString(),
+    })
+    .eq('id', reportId);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function hideScanReport(reportId: string, masterAccountId: string): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Account storage is not configured.');
+  }
+
+  const { error } = await supabase
+    .from('scan_reports')
+    .update({
+      hidden_by: masterAccountId,
+      hidden_at: new Date().toISOString(),
     })
     .eq('id', reportId);
 

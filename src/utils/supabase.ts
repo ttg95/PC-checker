@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { TriggerConfig } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -35,6 +36,13 @@ export interface ExclusionRow {
 
 export type ScanReviewStatus = 'pending' | 'confirmed_clean' | 'confirmed_cheating';
 
+export interface AppSettingRow {
+  key: string;
+  value: unknown;
+  updated_by: string | null;
+  updated_at: string;
+}
+
 export interface ScanReportRow {
   id: string;
   owner_id: string;
@@ -47,8 +55,12 @@ export interface ScanReportRow {
   review_status: ScanReviewStatus;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  hidden_at: string | null;
+  hidden_by: string | null;
   created_at: string;
   profiles?: {
     email: string;
   } | null;
 }
+
+export type TriggerConfigSetting = TriggerConfig;

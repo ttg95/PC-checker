@@ -41,6 +41,8 @@ create table if not exists public.scan_reports (
   review_status text not null default 'pending' check (review_status in ('pending', 'confirmed_clean', 'confirmed_cheating')),
   reviewed_by uuid references public.profiles(id) on delete set null,
   reviewed_at timestamptz,
+  hidden_by uuid references public.profiles(id) on delete set null,
+  hidden_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -58,7 +60,9 @@ alter table public.scan_reports
   add column if not exists display_name text not null default 'Untitled scan',
   add column if not exists review_status text not null default 'pending',
   add column if not exists reviewed_by uuid references public.profiles(id) on delete set null,
-  add column if not exists reviewed_at timestamptz;
+  add column if not exists reviewed_at timestamptz,
+  add column if not exists hidden_by uuid references public.profiles(id) on delete set null,
+  add column if not exists hidden_at timestamptz;
 
 do $$
 begin
@@ -87,6 +91,38 @@ on conflict (key) do nothing;
 
 insert into public.app_settings (key, value)
 values ('nav_order', '{"order":["dashboard","registry","events","apphistory","services","usb","dma","filesystem","systeminfo","tasks","processes","reports","accounts","master","admin"]}'::jsonb)
+on conflict (key) do nothing;
+
+insert into public.app_settings (key, value)
+values (
+  'trigger_config',
+  '{
+    "rules": [
+      {"id":"rule-unsigned-driver-recent","name":"Recently Installed Unsigned Driver","description":"Kernel driver installed within 7 days without valid digital signature","condition":"driver AND unsigned AND installedWithin(7)","riskLevel":"high","enabled":true,"weight":80},
+      {"id":"rule-unsigned-service-recent","name":"Recently Installed Unsigned Service","description":"Service installed within 7 days without valid digital signature","condition":"service AND unsigned AND installedWithin(7)","riskLevel":"high","enabled":true,"weight":75},
+      {"id":"rule-sign-media-unsigned","name":"SIGN.MEDIA Check - Unsigned Executable in MuiCache","description":"MuiCache entry found without valid digital signature (SIGN.MEDIA check)","condition":"registry.muiCache AND unsigned","riskLevel":"high","enabled":true,"weight":70},
+      {"id":"rule-cheat-provider-name","name":"Known Cheat Provider Name Detected","description":"File or registry entry matches known cheat provider names (Phantom Overlay, EngineOwning, AC Diamond, Cobalt, etc.)","condition":"name MATCHES cheatProviders","riskLevel":"high","enabled":true,"weight":85},
+      {"id":"rule-defender-exclusion-suspicious","name":"Suspicious Defender Exclusion","description":"Windows Defender exclusion added for suspicious paths (AppData, Temp, Downloads)","condition":"defender.exclusion AND suspiciousPath","riskLevel":"high","enabled":true,"weight":65},
+      {"id":"rule-dma-device-unknown","name":"Unknown PCIe/USB DMA Device","description":"Unknown DMA capture device or USB descriptor failure on PCIe/USB bus","condition":"dma.unknown OR dma.descriptorFailure","riskLevel":"high","enabled":true,"weight":75},
+      {"id":"rule-startup-persistence-new","name":"New Startup Persistence Entry","description":"New entry in auto-start registry locations within 7 days","condition":"registry.startup AND createdWithin(7)","riskLevel":"medium","enabled":true,"weight":55},
+      {"id":"rule-dll-openwith","name":"DLL OpenWithList Entry","description":"Executable registered in .dll OpenWithList - may indicate DLL injection tool","condition":"registry.dllOpenWith","riskLevel":"medium","enabled":true,"weight":50},
+      {"id":"rule-disallow-run","name":"DisallowRun Policy Detected","description":"Programs blocked via DisallowRun policy - may hide tools from Task Manager","condition":"registry.disallowRun","riskLevel":"medium","enabled":true,"weight":45},
+      {"id":"rule-usb-device-history","name":"USB Device Connection/Deletion","description":"USB devices connected or deleted - check for DMA hardware or USB drives","condition":"event.usbConnect OR event.usbDelete","riskLevel":"medium","enabled":true,"weight":40},
+      {"id":"rule-journal-delete","name":"USN Journal Activity Deleted","description":"Application event ID 3079 indicates USN readjournal was deleted","condition":"event.journalDelete","riskLevel":"medium","enabled":true,"weight":50},
+      {"id":"rule-prefetch-suspicious","name":"Suspicious Prefetch Entry","description":"Prefetch file for suspicious executable (injector, loader, unsigned)","condition":"prefetch AND suspiciousName","riskLevel":"medium","enabled":true,"weight":45},
+      {"id":"rule-hwid-spoof","name":"Potential HWID Spoof","description":"System product name or BIOS info may indicate HWID spoofing","condition":"hwid.spoofed","riskLevel":"medium","enabled":true,"weight":50},
+      {"id":"rule-winrar-suspicious","name":"Suspicious WinRAR History","description":"WinRAR archive history contains suspicious filenames (cheat, hack, aim, etc.)","condition":"winrar.suspiciousName","riskLevel":"medium","enabled":true,"weight":40},
+      {"id":"rule-nvidia-suspicious-program","name":"Suspicious NVIDIA Program Setting","description":"Unknown .exe found in NVIDIA Control Panel program settings","condition":"nvidia.suspiciousProgram","riskLevel":"medium","enabled":true,"weight":40},
+      {"id":"rule-multiple-user-accounts","name":"Multiple User Accounts","description":"Multiple user accounts on system - may indicate alternate accounts","condition":"users.count > 1","riskLevel":"low","enabled":true,"weight":20},
+      {"id":"rule-encrypted-drive","name":"Encrypted Volume Detected","description":"CIPHER /E attribute found on volume - may hide evidence","condition":"cipher.encrypted","riskLevel":"low","enabled":true,"weight":20},
+      {"id":"rule-manual-restore-point","name":"Manually Created Restore Point","description":"System restore point was manually created - may be used to rollback after cheating","condition":"restorePoint.manual","riskLevel":"low","enabled":true,"weight":15},
+      {"id":"rule-prefetch-in-temp","name":"Executable Run from Temp/AppData","description":"Executable run from non-standard path (Temp, AppData, Downloads)","condition":"path MATCHES nonStandardPaths","riskLevel":"medium","enabled":true,"weight":35},
+      {"id":"rule-process-unsigned","name":"Unsigned Running Process","description":"Currently running process without valid digital signature","condition":"process AND unsigned","riskLevel":"low","enabled":true,"weight":30}
+    ],
+    "cheatProviders": ["shadow","phantom overlay","phantom","engineowning","ac diamond","cobalt","lone''s","atomic","aimex","clutch","kratos","ducks","ring-1","ring1","dma","injector","loader","cheat engine","cheatengine"],
+    "nonStandardPaths": ["\\\\AppData\\\\","\\\\Temp\\\\","\\\\Downloads\\\\","\\\\Public\\\\","\\\\tmp\\\\"]
+  }'::jsonb
+)
 on conflict (key) do nothing;
 
 create or replace function public.is_master(user_id uuid)
@@ -410,6 +446,44 @@ begin
 end;
 $$;
 
+create or replace function public.set_trigger_config(selected_config jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_master(auth.uid()) then
+    raise exception 'Only the master account can update trigger settings.';
+  end if;
+
+  if selected_config is null or jsonb_typeof(selected_config) <> 'object' then
+    raise exception 'Trigger settings must be a JSON object.';
+  end if;
+
+  if jsonb_typeof(selected_config -> 'rules') <> 'array' then
+    raise exception 'Trigger settings must include a rules array.';
+  end if;
+
+  if jsonb_typeof(selected_config -> 'cheatProviders') <> 'array' then
+    raise exception 'Trigger settings must include a cheatProviders array.';
+  end if;
+
+  if jsonb_typeof(selected_config -> 'nonStandardPaths') <> 'array' then
+    raise exception 'Trigger settings must include a nonStandardPaths array.';
+  end if;
+
+  insert into public.app_settings (key, value, updated_by, updated_at)
+  values ('trigger_config', selected_config, auth.uid(), now())
+  on conflict (key) do update
+    set value = excluded.value,
+        updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at;
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
 grant execute on function public.consume_scan_credit() to authenticated;
 grant execute on function public.add_scan_credits(uuid, integer) to service_role;
 grant execute on function public.record_scan_token_payment(text, text, uuid, integer, integer, text) to service_role;
@@ -417,6 +491,7 @@ grant execute on function public.sync_current_user_profile() to authenticated;
 grant execute on function public.set_app_theme(text) to authenticated;
 grant execute on function public.set_app_appearance(text, boolean) to authenticated;
 grant execute on function public.set_nav_order(text[]) to authenticated;
+grant execute on function public.set_trigger_config(jsonb) to authenticated;
 grant select on public.app_settings to anon, authenticated;
 
 drop trigger if exists on_auth_user_created on auth.users;
@@ -463,6 +538,13 @@ create policy "exclusions_master_insert"
 on public.account_exclusions for insert
 to authenticated
 with check (public.is_master(auth.uid()) and created_by = auth.uid());
+
+drop policy if exists "exclusions_master_update" on public.account_exclusions;
+create policy "exclusions_master_update"
+on public.account_exclusions for update
+to authenticated
+using (public.is_master(auth.uid()))
+with check (public.is_master(auth.uid()));
 
 drop policy if exists "exclusions_master_delete" on public.account_exclusions;
 create policy "exclusions_master_delete"
